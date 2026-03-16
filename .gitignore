@@ -1,0 +1,138 @@
+# =========================
+
+# Python
+
+# =========================
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# compiled extensions
+
+*.so
+
+# distribution
+
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# =========================
+
+# Virtual environments
+
+# =========================
+
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+
+# Jupyter
+
+# =========================
+
+.ipynb_checkpoints/
+
+# =========================
+
+# VSCode
+
+# =========================
+
+.vscode/
+.history/
+
+# =========================
+
+# Logs
+
+# =========================
+
+*.log
+logs/
+
+# =========================
+
+# OS files
+
+# =========================
+
+.DS_Store
+Thumbs.db
+
+# =========================
+
+# Environment variables
+
+# =========================
+
+.env
+.env.*
+
+# =========================
+
+# Data / artifacts
+
+# =========================
+
+data/
+datasets/
+downloads/
+
+# raw pdfs
+
+*.pdf
+
+# parsed outputs
+
+*.json
+*.jsonl
+*.csv
+*.parquet
+
+# =========================
+
+# Embedding / vector DB
+
+# =========================
+
+faiss_index/
+chroma/
+chroma_db/
+qdrant_storage/
+vector_store/
+
+# =========================
+
+# Cache
+
+# =========================
+
+.cache/
+.cache_embeddings/
+.tmp/
+temp/
+
+# =========================
+
+# Model downloads
+
+# =========================
+
+models/
+hf_cache/
+
+# =========================
+
+# Misc
+
+# =========================
+
+*.bak
+*.tmp
+*.swp
