@@ -235,13 +235,35 @@ def pdf_to_chunks(pdf_path):
 # -----------------------------
 # 5. Сохранение
 # -----------------------------
+def save_chunks_with_key(chunks, path):
+    """Save chunks to a JSON file where the top-level keys are chunk_id.
 
-def save_chunks(chunks, path):
+    The resulting file will be a single JSON object in the form:
+      {"<chunk_id>": { ...chunk... }, ...}
+
+    Raises:
+        ValueError: if there are duplicate chunk_id values.
+    """
+
+    chunks_by_id = {}
+    for c in chunks:
+        cid = c.get("chunk_id")
+        if cid in chunks_by_id:
+            raise ValueError(f"Duplicate chunk_id: {cid}")
+        chunks_by_id[cid] = c
+
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(chunks_by_id, f, ensure_ascii=False, indent=2)
+
+def save_chunks(chunks, path, path_with_key):
 
     with open(path, "w", encoding="utf-8") as f:
 
         for c in chunks:
             f.write(json.dumps(c, ensure_ascii=False) + "\n")
+
+    save_chunks_with_key(chunks, path_with_key)
+
 
 
 # -----------------------------

@@ -1,0 +1,12 @@
+{
+  "models": [
+    {
+      "name": "intfloat/multilingual-e5-large",
+      "path": "models/multilingual-e5-large"
+    },
+    {
+      "name": "BAAI/bge-reranker-v2-m3",
+      "path": "models/bge-reranker-v2-m3"
+    }
+  ]
+}
