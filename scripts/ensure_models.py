@@ -1,28 +1,35 @@
-import os
 import json
-from sentence_transformers import SentenceTransformer
-from sentence_transformers import CrossEncoder
+from pathlib import Path
+from sentence_transformers import SentenceTransformer, CrossEncoder
 
 """
-Базовый скрипт для загрузки моделей по config файлу
+Скрипт для загрузки моделей по config файлу.
+Запускать из корня проекта: python scripts/ensure_models.py
 """
 
-def ensure_model(name, path):
-    if os.path.exists(path) and os.listdir(path):
-        print(f"[OK] {path} already exists")
+# Корень проекта — папка на уровень выше этого скрипта
+PROJECT_ROOT = Path(__file__).parent.parent
+CONFIG_PATH  = PROJECT_ROOT / "config" / "models_config.json"
+
+
+def ensure_model(name: str, path: str) -> None:
+    model_path = PROJECT_ROOT / path
+    if model_path.exists() and any(model_path.iterdir()):
+        print(f"[OK] {model_path} already exists")
         return
 
+    model_path.mkdir(parents=True, exist_ok=True)
     print(f"[DOWNLOAD] {name}")
-    if name == "DiTy/cross-encoder-russian-msmarco" or name == "BAAI/bge-reranker-v2-m3":
+    if name in ("DiTy/cross-encoder-russian-msmarco", "BAAI/bge-reranker-v2-m3"):
         model = CrossEncoder(name)
     else:
         model = SentenceTransformer(name)
-    model.save(path)
-    print(f"[SAVED] {path}")
+    model.save(str(model_path))
+    print(f"[SAVED] {model_path}")
 
 
-def main():
-    with open("config/models_config.json", "r") as f:
+def main() -> None:
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         config = json.load(f)
 
     for m in config["models"]:

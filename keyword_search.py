@@ -6,6 +6,7 @@ import pickle
 
 morph = MorphAnalyzer()
 
+
 def tokenize_lemmatize(text: str):
     tokens = [t.text for t in razdel_tokenize(text)]
     lemmas = []
@@ -17,23 +18,19 @@ def tokenize_lemmatize(text: str):
             lemmas.append(p.normal_form.lower())
     return lemmas
 
+
 def build_bm25(chunks):
     texts = [c["raw_text"] for c in chunks]
     tokenized = [tokenize_lemmatize(t) for t in texts]
-
     bm25 = BM25Okapi(tokenized)
-
     return bm25, tokenized
+
 
 def search(bm25, chunks, query, k=3):
     tokens = tokenize_lemmatize(query)
-
     score = bm25.get_scores(tokens)
-
     top_k = sorted(range(len(score)), key=lambda i: score[i], reverse=True)[:k]
-
     results = []
-
     for i in top_k:
         results.append({
             "score": float(score[i]),
@@ -41,55 +38,54 @@ def search(bm25, chunks, query, k=3):
             "raw_text": chunks[i].get("raw_text"),
             "metadata": chunks[i].get("metadata")
         })
-
     return results
 
-def save_index(bm25, tokenized, bm25_path, bm25_tokenized_path):
+
+def search_bm25(bm25, chunks, query: str, top_k: int = 3) -> list:
+    """Поиск с уже загруженными индексом и чанками (без I/O)."""
+    return search(bm25, chunks, query, top_k)
+
+
+def save_index(bm25, bm25_path):
+    """Сохраняет только BM25 объект — tokenized не нужен для поиска."""
     with open(bm25_path, "wb") as f:
         pickle.dump(bm25, f)
-
-    with open(bm25_tokenized_path, "wb") as f:
-        pickle.dump(tokenized, f)
-
     print("[SAVED] BM25 index")
+
 
 def load_bm25(bm25_path):
     with open(bm25_path, "rb") as f:
         bm25 = pickle.load(f)
-
     return bm25
 
-"""
-Pipeline создания и сохранения bm25 и его индексов
-"""
-def create_bm25_index_pipeline(chunks_path = "data\\chunks.jsonl", bm25_path="data\\bm25.pkl", bm25_tokenized_path="data\\bm25_tokenized"):
+
+def create_bm25_index_pipeline(
+    chunks_path="data/chunks.jsonl",
+    bm25_path="data/bm25.pkl",
+):
+    """Pipeline создания и сохранения BM25 индекса."""
     chunks = load_chunks(chunks_path)
+    bm25, _ = build_bm25(chunks)
+    save_index(bm25, bm25_path)
 
-    bm25, tokenized = build_bm25(chunks)
 
-    save_index(bm25, tokenized, bm25_path, bm25_tokenized_path)
-
-"""
-Pipeline поиска по индексам bm25
-"""
-def search_bm25_pipeline(query: str, chunks_path = "data\\chunks.jsonl", bm25_path="data\\bm25.pkl", bm25_tokenized_path="data\\bm25_tokenized", top_k=3):
+def search_bm25_pipeline(
+    query: str,
+    chunks_path="data/chunks.jsonl",
+    bm25_path="data/bm25.pkl",
+    top_k=3,
+):
+    """Pipeline поиска (загружает всё с диска — используй search_bm25 если уже загружено)."""
     chunks = load_chunks(chunks_path)
-
     bm25 = load_bm25(bm25_path)
-
-    results = search(bm25, chunks, query, top_k)
-
-    return results
+    return search(bm25, chunks, query, top_k)
 
 
 if __name__ == "__main__":
-    chunks = load_chunks("data\\chunks.jsonl")
-
+    chunks = load_chunks("data/chunks.jsonl")
     bm25, tokenized = build_bm25(chunks)
-
     res = search(bm25, chunks, "Что такое мультимножество", 5)
-
     for r in res:
-            print("\n---")
-            print("score:", r["score"])
-            print("text:", r["chunk_id"])
+        print("\n---")
+        print("score:", r["score"])
+        print("chunk_id:", r["chunk_id"])
