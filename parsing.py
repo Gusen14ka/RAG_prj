@@ -158,17 +158,17 @@ def group_pages_to_containers(pdf_path: str) -> List[Dict[str,Any]]:
         # group(1) опциональна — страница без номера не является заголовком нового раздела
         has_numbered_header = m is not None and m.group(1) is not None
         if has_numbered_header:
-            sec = m.group(1).strip()
+            sec = m.group(1).strip() # type: ignore
             if current is not None:
                 if current["section_id"] == sec:
                     current["page_texts"].append(ptext)
                 else:
                     containers.append(current)
                     current = {"section_id": sec, "page_texts": [ptext],
-                               "metadata":{"section": current["metadata"]["section"], "subsection": m.group(2).strip()}}
+                               "metadata":{"section": current["metadata"]["section"], "subsection": m.group(2).strip()}} # type: ignore
             else:
                 current = {"section_id": sec, "page_texts": [ptext],
-                           "metadata":{"section": m.group(2).strip(), "subsection": ""}}
+                           "metadata":{"section": m.group(2).strip(), "subsection": ""}} # type: ignore
         else:
             if current is None:
                 # Контейнер предисловия (страницы до первого нумерованного раздела)

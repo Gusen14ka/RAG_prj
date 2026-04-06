@@ -29,7 +29,7 @@ def rerank(
     if not pairs:
         return []
 
-    scores = model.predict(pairs, show_progress_bar=False)
+    scores = model.predict(pairs, show_progress_bar=False, convert_to_numpy=True)
 
     # ИСПРАВЛЕНО: сортировка по x[1] (score), а не x[0] (chunk_id)
     return sorted(zip(chunks_ids, scores), key=lambda x: x[1], reverse=True)[:top_k]

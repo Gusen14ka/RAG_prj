@@ -4,8 +4,9 @@ from pathlib import Path
 
 # UTF-8 вывод на Windows (cmd/PowerShell по умолчанию cp1251)
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, 'reconfigure') and hasattr(sys.stderr, 'reconfigure'):
+        sys.stdout.reconfigure(encoding="utf-8") #type: ignore
+        sys.stderr.reconfigure(encoding="utf-8") #type: ignore
 
 from parsing import pdf_to_chunks, save_chunks
 from embedding import (
