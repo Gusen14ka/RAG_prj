@@ -9,7 +9,7 @@ from utils.recursive_chunking import recursive_chunking
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 50
 SEPARATORS = ["\n\n", "\n", ". ", "? ", "! ", " ", ""]
-HEADER_RE = pattern = re.compile(
+HEADER_RE = re.compile(  # ИСПРАВЛЕНО: убран лишний псевдоним `pattern`
     r"^\s*"                    # Пробелы в начале
     r"(?:(\d+(?:\.\d+)*)\.?)?"  # ГРУППА 1: опциональный номер (1 или 1.2.3)
     r"\s*"                      # Пробелы между номером и текстом
@@ -38,8 +38,7 @@ def page_to_text(page_layout) -> str:
 # 3. Очистка текста
 # -----------------------------
 
-import re
-from typing import Optional
+from typing import Optional  # ИСПРАВЛЕНО: убран дублирующий `import re`
 
 DEFAULT_FORMULA_TOKEN = "<FORMULA>"
 
@@ -156,22 +155,23 @@ def group_pages_to_containers(pdf_path: str) -> List[Dict[str,Any]]:
         # берём первую не нулевую строку
         first_lines = "\n".join([ln for ln in ptext.splitlines() if ln.strip()][:3])
         m = HEADER_RE.match(first_lines) if first_lines else None
-        if m:
-            sec = m.group(1).strip()
-            #print(m.group(2).strip())
+        # group(1) опциональна — страница без номера не является заголовком нового раздела
+        has_numbered_header = m is not None and m.group(1) is not None
+        if has_numbered_header:
+            sec = m.group(1).strip() # type: ignore
             if current is not None:
                 if current["section_id"] == sec:
                     current["page_texts"].append(ptext)
                 else:
                     containers.append(current)
                     current = {"section_id": sec, "page_texts": [ptext],
-                               "metadata":{"section": current["metadata"]["section"], "subsection": m.group(2).strip()}}
+                               "metadata":{"section": current["metadata"]["section"], "subsection": m.group(2).strip()}} # type: ignore
             else:
                 current = {"section_id": sec, "page_texts": [ptext],
-                           "metadata":{"section": m.group(2).strip(), "subsection": ""}}
+                           "metadata":{"section": m.group(2).strip(), "subsection": ""}} # type: ignore
         else:
             if current is None:
-                # Контейнер предисловия
+                # Контейнер предисловия (страницы до первого нумерованного раздела)
                 current = {"section_id":"preface", "page_texts": [ptext],
                            "metadata":{"section": "", "subsection": ""}}
             else:
@@ -271,12 +271,14 @@ def save_chunks(chunks, path, path_with_key):
 # -----------------------------
 
 if __name__ == "__main__":
+    import os
+    os.makedirs("data", exist_ok=True)
 
-    pdf_file = "test2.pdf"
-    output_file = "chunks.jsonl"
+    pdf_file = "test.pdf"
+    output_file = "data/chunks.jsonl"
+    output_file_with_key = "data/chunks_with_key.json"
 
     chunks = pdf_to_chunks(pdf_file)
-
-    save_chunks(chunks, output_file)
-
-    #print("chunks created:", len(chunks))
+    # ИСПРАВЛЕНО: save_chunks требует 3 аргумента
+    save_chunks(chunks, output_file, output_file_with_key)
+    print(f"Создано чанков: {len(chunks)}")
