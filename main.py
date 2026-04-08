@@ -124,7 +124,11 @@ def main_search():
         if not Path(SOURCE_PDF_PATH).exists():
             print(f"    ОШИБКА: {SOURCE_PDF_PATH} не найден.")
             return
-        chunks = pdf_to_chunks(SOURCE_PDF_PATH)
+         # Костыль против кривого парсинга
+        if not Path(CHUNK_PATH).exists():
+            chunks = pdf_to_chunks(SOURCE_PDF_PATH)
+        else:
+            chunks = load_chunks(CHUNK_PATH)
         save_chunks(chunks, CHUNK_PATH, CHUNK_WITH_KEY_PATH)
         print(f"    Создано {len(chunks)} чанков.")
     else:

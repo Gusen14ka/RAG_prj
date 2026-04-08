@@ -46,7 +46,11 @@ async def lifecycle(app: FastAPI):
     if not Path(CHUNK_PATH).exists() or not Path(CHUNK_WITH_KEY_PATH).exists():
         if not Path(SOURCE_PDF_PATH).exists():
             raise RuntimeError(f"Source PDF {SOURCE_PDF_PATH} not found. Please provide the PDF file.")
-        chunks = pdf_to_chunks(SOURCE_PDF_PATH)
+        # Костыль против кривого парсинга
+        if not Path(CHUNK_PATH).exists():
+            chunks = pdf_to_chunks(SOURCE_PDF_PATH)
+        else:
+            chunks = load_chunks(CHUNK_PATH)
         save_chunks(chunks, CHUNK_PATH, CHUNK_WITH_KEY_PATH)
         print(f"    Created {len(chunks)} chunks.")
     else:
