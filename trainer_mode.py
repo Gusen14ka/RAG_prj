@@ -3,7 +3,6 @@ import json
 import re
 from pathlib import Path
 from typing import List, Optional, Any, Sequence, Tuple, Iterable, Dict
-
 from natasha import (
     Doc,
     MorphVocab,
@@ -14,6 +13,7 @@ from natasha import (
     Segmenter,
 )
 import yake
+
 
 MULTISPACE_RE = re.compile(r"\s+")
 HEADER_RE = re.compile(r"^(?:Раздел:|Подраздел:|Примечание:)\s+.+$", flags=re.MULTILINE)
@@ -514,9 +514,9 @@ class Trainer:
         cov = self._keyword_coverage(answer, question.keywords)
 
         # Проводим сравнение рерак-моделью:
-        q_score = self.rerank_model.predict([(answer, question.question)], show_progress_bar=False)
-        src_score = self.rerank_model.predict([(answer, question.source_sentence)], show_progress_bar=False)
-        gold_score = self.rerank_model.predict([(answer, question.answer)], show_progress_bar=False)
+        q_score = self.rerank_model.predict([(answer, question.question)], show_progress_bar=False)[0]
+        src_score = self.rerank_model.predict([(answer, question.source_sentence)], show_progress_bar=False)[0]
+        gold_score = self.rerank_model.predict([(answer, question.answer)], show_progress_bar=False)[0]
 
         final_score = (self.q_score_weight * q_score 
                        + self.src_score_weight * src_score 

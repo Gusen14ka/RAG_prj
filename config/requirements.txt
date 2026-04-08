@@ -6,6 +6,7 @@ click==8.3.1
 colorama==0.4.6
 cryptography==46.0.5
 DAWG2-Python==0.9.0
+fastapi==0.115.6
 filelock==3.25.2
 fsspec==2026.2.0
 h11==0.16.0
@@ -25,6 +26,7 @@ numpy==2.4.3
 packaging==26.0
 pdfminer.six==20260107
 pycparser==3.0
+pydantic>=2.10,<3
 Pygments==2.19.2
 pymorphy3==2.0.6
 pymorphy3-dicts-ru==2.4.417150.4580142
@@ -39,6 +41,7 @@ scipy==1.17.1
 sentence-transformers==5.3.0
 setuptools==81.0.0
 shellingham==1.5.4
+starlette==0.41.3
 sympy==1.14.0
 threadpoolctl==3.6.0
 tokenizers==0.22.2
@@ -47,6 +50,7 @@ tqdm==4.67.3
 transformers==5.3.0
 typer==0.24.1
 typing_extensions==4.15.0
+uvicorn[standard]==0.34.0
 wheel==0.46.3
 natasha
 yake
