@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NonLLM RAG System</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #f8f7f4;
+    --surface: #ffffff;
+    --surface2: #f1efe8;
+    --border: rgba(0,0,0,0.12);
+    --border-soft: rgba(0,0,0,0.07);
+    --text: #1a1a18;
+    --text2: #5f5e5a;
+    --text3: #888780;
+    --accent: #534AB7;
+    --accent-bg: #EEEDFE;
+    --accent-text: #3C3489;
+    --success-bg: #EAF3DE;
+    --success-text: #3B6D11;
+    --danger-bg: #FCEBEB;
+    --danger-text: #A32D2D;
+    --r-md: 8px;
+    --r-lg: 12px;
+    --r-xl: 16px;
+    --transition: 0.28s cubic-bezier(0.4,0,0.2,1);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a18;
+      --surface: #26261f;
+      --surface2: #2c2c2a;
+      --border: rgba(255,255,255,0.12);
+      --border-soft: rgba(255,255,255,0.07);
+      --text: #f0ede8;
+      --text2: #b4b2a9;
+      --text3: #888780;
+      --accent: #AFA9EC;
+      --accent-bg: #26215C;
+      --accent-text: #CECBF6;
+      --success-bg: #173404;
+      --success-text: #C0DD97;
+      --danger-bg: #501313;
+      --danger-text: #F7C1C1;
+    }
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  .app { max-width: 760px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+
+  .header { margin-bottom: 2rem; }
+  .header h1 { font-size: 22px; font-weight: 500; margin-bottom: 4px; }
+  .header p { font-size: 13px; color: var(--text3); }
+
+  /* Mode switcher */
+  .mode-bar {
+    display: flex;
+    gap: 8px;
+    background: var(--surface2);
+    border: 0.5px solid var(--border-soft);
+    border-radius: var(--r-lg);
+    padding: 4px;
+    margin-bottom: 1.5rem;
+  }
+  .mode-btn {
+    flex: 1;
+    padding: 8px 16px;
+    border: none;
+    background: transparent;
+    border-radius: var(--r-md);
+    font-size: 14px;
+    font-weight: 400;
+    color: var(--text2);
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+  }
+  .mode-btn.active {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 500;
+    border: 0.5px solid var(--border);
+  }
+
+  /* Panels */
+  .panel {
+    overflow: hidden;
+    transition: max-height 0.4s cubic-bezier(0.4,0,0.2,1), opacity 0.3s ease;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+  .panel.open {
+    max-height: 9999px;
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  /* Question card */
+  .question-text {
+    font-size: 17px;
+    font-weight: 500;
+    margin-bottom: 1.25rem;
+    line-height: 1.5;
+  }
+  .answer-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  textarea.answer-input {
+    flex: 1;
+    min-height: 80px;
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    resize: vertical;
+    outline: none;
+    transition: border-color var(--transition);
+  }
+  textarea.answer-input:focus { border-color: var(--accent); }
+  textarea.answer-input::placeholder { color: var(--text3); }
+
+  button.primary {
+    padding: 10px 18px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--r-md);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity var(--transition), transform 0.1s;
+  }
+  button.primary:hover { opacity: 0.88; }
+  button.primary:active { transform: scale(0.98); }
+  button.primary:disabled { opacity: 0.4; cursor: default; }
+
+  button.secondary {
+    padding: 8px 14px;
+    background: transparent;
+    color: var(--text2);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background var(--transition), color var(--transition);
+  }
+  button.secondary:hover { background: var(--surface2); color: var(--text); }
+
+  .result-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 12px;
+  }
+  .result-badge.correct { background: var(--success-bg); color: var(--success-text); }
+  .result-badge.wrong { background: var(--danger-bg); color: var(--danger-text); }
+
+  .source-block {
+    padding: 10px 14px;
+    background: var(--surface2);
+    border-left: 2px solid var(--accent);
+    border-radius: 0 var(--r-md) var(--r-md) 0;
+    font-size: 13px;
+    color: var(--text2);
+    margin-top: 10px;
+    line-height: 1.6;
+  }
+  .source-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+
+  /* Search / учебник */
+  .search-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1.25rem;
+  }
+  input.search-input {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-md);
+    outline: none;
+    transition: border-color var(--transition);
+  }
+  input.search-input:focus { border-color: var(--accent); }
+  input.search-input::placeholder { color: var(--text3); }
+
+  .chunk-card {
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: 1.1rem 1.25rem;
+    margin-bottom: 0.75rem;
+  }
+  .chunk-card.main-chunk { border-left: 2px solid var(--accent); }
+  .chunk-meta {
+    font-size: 11px;
+    color: var(--text3);
+    margin-bottom: 8px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .chunk-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--accent-bg);
+    color: var(--accent-text);
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .chunk-text { font-size: 14px; line-height: 1.7; color: var(--text); }
+
+  .show-more-row { margin: 0.5rem 0 1rem; }
+
+  .extra-sources-label {
+    font-size: 12px;
+    color: var(--text3);
+    margin: 1rem 0 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Empty/placeholder */
+  .empty { text-align: center; padding: 2.5rem 1rem; color: var(--text3); font-size: 14px; }
+
+  /* Spinner */
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Logs */
+  .logs-toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 2.5rem;
+    padding-top: 1.25rem;
+    border-top: 0.5px solid var(--border-soft);
+  }
+  .logs-toggle-row span { font-size: 13px; color: var(--text3); }
+  .log-entry {
+    background: var(--surface);
+    border: 0.5px solid var(--border-soft);
+    border-radius: var(--r-md);
+    padding: 10px 14px;
+    margin-bottom: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    color: var(--text2);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log-entry .log-time { color: var(--text3); }
+  .log-entry .log-dir-req { color: #378ADD; }
+  .log-entry .log-dir-res { color: #639922; }
+  .log-entry .log-err { color: #E24B4A; }
+  .logs-panel { margin-top: 1rem; max-height: 400px; overflow-y: auto; }
+
+  .next-btn-row { margin-top: 1.25rem; display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="header">
+    <h1>Non LLM RAG система</h1>
+    <p>Тренажёр и учебник на основе пособия "Дискретная математика для программистов"</p>
+  </div>
+
+  <!-- Mode switcher -->
+  <div class="mode-bar" role="tablist">
+    <button class="mode-btn active" id="btn-study" onclick="setMode('study')">Учебник</button>
+    <button class="mode-btn" id="btn-trainer" onclick="setMode('trainer')">Тренажёр</button>
+  </div>
+
+  <!-- TRAINER PANEL -->
+  <div class="panel" id="panel-trainer">
+
+    <div class="card" id="trainer-card">
+      <div id="trainer-body">
+        <div class="empty">
+          <span class="spinner"></span> Загружаем вопрос...
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- STUDY PANEL -->
+  <div class="panel open" id="panel-study">
+
+    <div class="search-row">
+      <input class="search-input" id="search-input" type="text" placeholder="Задайте вопрос..." onkeydown="if(event.key==='Enter') doSearch()" />
+      <button class="primary" id="search-btn" onclick="doSearch()">Найти</button>
+    </div>
+
+    <div id="search-results">
+      <div class="empty">Введите вопрос — и мы найдём ответ в базе знаний</div>
+    </div>
+
+  </div>
+
+  <!-- LOGS SECTION -->
+  <div class="logs-toggle-row">
+    <span>Логи запросов</span>
+    <div style="display:flex;gap:8px;">
+      <button class="secondary" id="logs-toggle-btn" onclick="toggleLogs()">Показать</button>
+      <button class="secondary" onclick="exportLogs()">Скачать .txt</button>
+    </div>
+  </div>
+  <div class="panel" id="logs-panel">
+    <div class="logs-panel" id="logs-list">
+      <div class="empty" style="padding:1.5rem 0;">Логов пока нет</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const API_BASE = 'http://localhost:8000';
+let currentMode = 'study';
+let allQuestions = [];
+let currentQuestion = null;
+let searchResults = [];
+let logsVisible = false;
+const logs = [];
+
+/* ─── UTILS ─── */
+function ts() {
+  return new Date().toLocaleTimeString('ru', { hour12: false });
+}
+
+function addLog(dir, url, payload, response) {
+  const entry = { ts: ts(), dir, url, payload, response };
+  logs.push(entry);
+  renderLog(entry);
+}
+
+function renderLog(entry) {
+  const list = document.getElementById('logs-list');
+  if (list.querySelector('.empty')) list.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'log-entry';
+  const dirClass = entry.dir === 'req' ? 'log-dir-req' : (entry.dir === 'err' ? 'log-err' : 'log-dir-res');
+  const dirLabel = entry.dir === 'req' ? '→ REQ' : (entry.dir === 'err' ? '✗ ERR' : '← RES');
+  div.innerHTML = `<span class="log-time">[${entry.ts}]</span> <span class="${dirClass}">${dirLabel}</span> ${entry.url}\n${JSON.stringify(entry.payload, null, 2)}`;
+  list.insertBefore(div, list.firstChild);
+}
+
+async function apiFetch(path, method = 'GET', body = null) {
+  const url = API_BASE + path;
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  addLog('req', url, body || {});
+  try {
+    const res = await fetch(url, opts);
+    const data = await res.json();
+    addLog('res', url, data);
+    if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
+    return data;
+  } catch (e) {
+    addLog('err', url, { error: e.message });
+    throw e;
+  }
+}
+
+/* ─── LOGS ─── */
+function toggleLogs() {
+  logsVisible = !logsVisible;
+  document.getElementById('logs-panel').classList.toggle('open', logsVisible);
+  document.getElementById('logs-toggle-btn').textContent = logsVisible ? 'Скрыть' : 'Показать';
+}
+
+function exportLogs() {
+  const lines = logs.map(l => `[${l.ts}] ${l.dir.toUpperCase()} ${l.url}\n${JSON.stringify(l.payload, null, 2)}`).join('\n\n---\n\n');
+  const blob = new Blob([lines || 'Нет логов'], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'rag_logs.txt';
+  a.click();
+}
+
+/* ─── MODE ─── */
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('btn-trainer').classList.toggle('active', mode === 'trainer');
+  document.getElementById('btn-study').classList.toggle('active', mode === 'study');
+  document.getElementById('panel-trainer').classList.toggle('open', mode === 'trainer');
+  document.getElementById('panel-study').classList.toggle('open', mode === 'study');
+}
+
+/* ─── TRAINER ─── */
+async function loadQuestions() {
+  try {
+    const data = await apiFetch('/questions');
+    allQuestions = data.questions || [];
+    if (allQuestions.length === 0) {
+      document.getElementById('trainer-body').innerHTML = '<div class="empty">Вопросов нет в банке</div>';
+      return;
+    }
+    nextQuestion();
+  } catch (e) {
+    document.getElementById('trainer-body').innerHTML = `<div class="empty" style="color:var(--danger-text)">Не удалось загрузить вопросы: ${e.message}</div>`;
+  }
+}
+
+function nextQuestion() {
+  const idx = Math.floor(Math.random() * allQuestions.length);
+  currentQuestion = allQuestions[idx];
+  renderQuestion();
+}
+
+function renderQuestion() {
+  const tb = document.getElementById('trainer-body');
+  tb.innerHTML = `
+    <div class="question-text">${escHtml(currentQuestion.question)}</div>
+    <div class="answer-row">
+      <textarea class="answer-input" id="trainer-answer" placeholder="Ваш ответ..." rows="3"></textarea>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px;align-items:center;">
+      <button class="primary" id="check-btn" onclick="checkAnswer()">Проверить</button>
+      <button class="secondary" onclick="nextQuestion()">Другой вопрос</button>
+    </div>
+    <div id="trainer-result" style="margin-top:14px;"></div>
+  `;
+  document.getElementById('trainer-answer').focus();
+}
+
+async function checkAnswer() {
+  const ans = document.getElementById('trainer-answer').value.trim();
+  if (!ans) return;
+  const btn = document.getElementById('check-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Проверяю...';
+  try {
+    const data = await apiFetch('/check_answer', 'POST', {
+      question_id: currentQuestion.question_id,
+      user_answer: ans,
+    });
+    const r = data.result;
+    const isCorrect = r.is_correct;
+    const resultEl = document.getElementById('trainer-result');
+    resultEl.innerHTML = `
+      <div class="result-badge ${isCorrect ? 'correct' : 'wrong'}">
+        ${isCorrect ? '✓ Правильно' : '✗ Неверно'}
+      </div>
+      <div class="source-block">
+        <div class="source-label">Источник</div>
+        ${escHtml(r.source_sentence)}
+      </div>
+      ${!isCorrect ? `<div class="source-block" style="margin-top:8px;border-left-color:#E24B4A;">
+        <div class="source-label">Правильный ответ</div>
+        ${escHtml(r.gold_answer)}
+      </div>` : ''}
+    `;
+    btn.disabled = false;
+    btn.textContent = 'Проверить';
+
+    const nextRow = document.querySelector('.next-btn-row');
+    if (!nextRow) {
+      const row = document.createElement('div');
+      row.className = 'next-btn-row';
+      row.innerHTML = '<button class="secondary" onclick="nextQuestion()">Следующий вопрос →</button>';
+      document.getElementById('trainer-result').after(row);
+    }
+  } catch (e) {
+    document.getElementById('trainer-result').innerHTML = `<div style="color:var(--danger-text);font-size:13px;">Ошибка: ${e.message}</div>`;
+    btn.disabled = false;
+    btn.textContent = 'Проверить';
+  }
+}
+
+/* ─── STUDY ─── */
+async function doSearch() {
+  const q = document.getElementById('search-input').value.trim();
+  if (!q) return;
+  const btn = document.getElementById('search-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Ищу...';
+  document.getElementById('search-results').innerHTML = '<div class="empty"><span class="spinner"></span> Поиск...</div>';
+
+  try {
+    const data = await apiFetch('/search', 'POST', { query: q });
+    searchResults = data.result || [];
+    renderResults();
+  } catch (e) {
+    document.getElementById('search-results').innerHTML = `<div class="empty" style="color:var(--danger-text)">Ошибка: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Найти';
+  }
+}
+
+function renderResults(showAll = false) {
+  const el = document.getElementById('search-results');
+  if (!searchResults.length) {
+    el.innerHTML = '<div class="empty">Ничего не найдено</div>';
+    return;
+  }
+
+  const main = searchResults[0];
+  const extras = searchResults.slice(1);
+
+  let html = `
+    <div class="chunk-card main-chunk">
+      <div class="chunk-meta">
+        <span class="chunk-badge">Лучший результат</span>
+        <span>Источник: ${escHtml(main.chunk_id)}</span>
+      </div>
+      <div class="chunk-text">${escHtml(main.text)}</div>
+    </div>
+  `;
+
+  if (extras.length > 0 && !showAll) {
+    html += `<div class="show-more-row"><button class="secondary" onclick="renderResults(true)">Показать ещё ${extras.length} источника</button></div>`;
+  }
+
+  if (showAll && extras.length > 0) {
+    html += `<div class="extra-sources-label">Дополнительные источники</div>`;
+    extras.forEach(ch => {
+      html += `
+        <div class="chunk-card">
+          <div class="chunk-meta">
+            <span>Источник: ${escHtml(ch.chunk_id)}</span>
+          </div>
+          <div class="chunk-text">${escHtml(ch.text)}</div>
+        </div>
+      `;
+    });
+  }
+
+  el.innerHTML = html;
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ─── INIT ─── */
+loadQuestions();
+</script>
+</body>
+</html>
