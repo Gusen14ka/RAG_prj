@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import asyncio
@@ -157,13 +156,6 @@ def perform_check_answer(
 
 app = FastAPI(title="NON LLM RAG", version="1.0.0", lifespan=lifecycle)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],          # для прода замени на конкретный origin
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 class SearchRequest(BaseModel):
     query: str
 
@@ -172,7 +164,7 @@ class CheckAnswerRequest(BaseModel):
     user_answer: str
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "ok"}
 
 @app.post("/search")

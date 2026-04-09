@@ -1,0 +1,34 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag_backend
+    # Не прокидываем 8000, делаем его доступным внутри контейнра
+    # Со внешкой общаемся через nginx
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+            "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 1m30s
+      timeout: 30s
+      retries: 5
+      start_period: 2m
+  
+  frontend:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    container_name: rag_frontend
+    ports:
+      - "80:80" # Порт nginx
+    depends_on:
+      backend:
+        # depends_on с condition: service_healthy гарантирует,
+        # что nginx стартует только когда бэкенд прошёл healthcheck.
+        # Без этого nginx может стартовать раньше бэка, и первые
+        # запросы через proxy_pass упадут с 502 Bad Gateway.
+        condition: service_healthy
+    restart: unless-stopped
