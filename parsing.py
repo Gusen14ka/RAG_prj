@@ -188,7 +188,7 @@ def normalize_text(text: str) -> str:
 #     алгоритмов → clean_text
 # ---------------------------------------------------------------------------
 
-# Паттерн начала блока алгоритма: строка начинается с while/for без кириллицы
+# Паттерн начала блока алгоритма: строка начинается с while/for/if без кириллицы
 _ALGO_BLOCK_START_RE = re.compile(
     r"^\s*(while\b|for\b.+\bdo\b|if\b.+\bthen\b)",
     re.I
@@ -198,6 +198,24 @@ _ALGO_BLOCK_END_RE = re.compile(
     r"\b(end\s+while|end\s+for|end\s+if)\b",
     re.I
 )
+# Паттерн начала Pascal/Algo блока begin
+_PASCAL_BEGIN_RE = re.compile(r"^\s*begin\b", re.I)
+# Паттерн конца Pascal/Algo блока end (без while/for/if суффикса)
+_PASCAL_END_RE = re.compile(r"^\s*end[\s;.]*$", re.I)
+# Заголовок алгоритма на русском: "Алгоритм 1:", "Алгоритм 2.3.", "Алгоритм A:"
+_ALGO_HEADER_RU_RE = re.compile(
+    r"^\s*(?:Алгоритм|Algorithm)\s+[\w.]+\s*[:.)]?\s*$",
+    re.I
+)
+# Признаки строки кода: операторы присваивания, стрелки, ключевые слова языков
+_CODE_SIGNS_RE = re.compile(
+    r":=|->|<-|←|→|\boutput\b|\binput\b|\bprint\b|\bgoto\b"
+    r"|\breturn\b|\byield\b|\bdo\b.*:|\bthen\b.*:|\belse\b.*:",
+    re.I
+)
+# Минимум подряд идущих некириллических строк с признаками кода для удаления блока
+_CODE_BLOCK_MIN_LINES = 4
+
 # Инлайн-алгоритм на одной строке: содержит do...end или yield внутри {}
 _ALGO_INLINE_RE = re.compile(
     r"while\b[^.]*?\bdo\b.+?\bend\s+while\b"
@@ -210,41 +228,87 @@ _ALGO_INLINE_RE = re.compile(
 def _remove_algo_blocks(text: str) -> str:
     """
     Убирает многострочные блоки псевдокода:
-        while ... do
-            ...
-        end while
-    Инлайн-алгоритмы внутри {...} не трогает — они часть определений.
+    1. while/for/if ... end while/end for/end if
+    2. begin ... end (Pascal-style)
+    3. Строки с заголовком «Алгоритм N:» + следующие некириллические строки
+    4. Блоки ≥4 подряд идущих некириллических строк с признаками кода (:=, ->, return…)
     """
     lines = text.splitlines()
-    result = []
-    in_block = False
+    result: list = []
+    in_block = False      # while/for/if block
+    in_pascal = False     # begin...end block
+    noncyrillic_run: list = []  # буфер некириллических строк (для эвристики)
+    skip_next_noncyrillic = False  # после заголовка алгоритма
+
+    def flush_noncyrillic():
+        """Сбрасываем буфер некириллических строк в result или отбрасываем."""
+        nonlocal noncyrillic_run
+        if not noncyrillic_run:
+            return
+        # Если в буфере ≥ _CODE_BLOCK_MIN_LINES строк с признаками кода — отбрасываем
+        code_lines = sum(1 for l in noncyrillic_run if _CODE_SIGNS_RE.search(l))
+        if len(noncyrillic_run) >= _CODE_BLOCK_MIN_LINES and code_lines >= 1:
+            pass  # весь буфер — код, выбрасываем
+        else:
+            result.extend(noncyrillic_run)
+        noncyrillic_run = []
 
     for line in lines:
         stripped = line.strip()
 
+        # --- Режим while/for/if блока ---
         if in_block:
-            # Ищем конец блока — строку с end тоже пропускаем
             if _ALGO_BLOCK_END_RE.search(stripped):
                 in_block = False
             continue
 
-        # Начало блока: строка без кириллицы, начинается с while/for/if
-        if (not _has_cyrillic(stripped)
-                and _ALGO_BLOCK_START_RE.match(stripped)):
-            # Если блок закрывается на той же строке — однострочный, оставляем
+        # --- Режим begin...end блока ---
+        if in_pascal:
+            if _PASCAL_END_RE.match(stripped):
+                in_pascal = False
+            continue
+
+        # --- Заголовок алгоритма на русском ---
+        if _ALGO_HEADER_RU_RE.match(stripped):
+            flush_noncyrillic()
+            skip_next_noncyrillic = True
+            continue  # сам заголовок выбрасываем
+
+        # --- Начало while/for/if блока ---
+        if not _has_cyrillic(stripped) and _ALGO_BLOCK_START_RE.match(stripped):
+            flush_noncyrillic()
             if _ALGO_BLOCK_END_RE.search(stripped):
-                result.append(line)
+                result.append(line)  # однострочный — оставляем
             else:
                 in_block = True
             continue
 
-        # Одиночный end-маркер без открывающего блока (orphan) — пропускаем
-        if (not _has_cyrillic(stripped)
-                and _ALGO_BLOCK_END_RE.match(stripped.strip())):
+        # --- Начало Pascal begin...end блока ---
+        if not _has_cyrillic(stripped) and _PASCAL_BEGIN_RE.match(stripped):
+            flush_noncyrillic()
+            in_pascal = True
             continue
 
+        # --- Одиночный end-маркер while/for/if без открывающего ---
+        if not _has_cyrillic(stripped) and _ALGO_BLOCK_END_RE.match(stripped):
+            continue
+
+        # --- Некириллическая строка: накапливаем в буфер ---
+        if stripped and not _has_cyrillic(stripped):
+            if skip_next_noncyrillic:
+                # Строки сразу после заголовка алгоритма — это тело алгоритма
+                noncyrillic_run.append(line)
+                continue
+            noncyrillic_run.append(line)
+            continue
+
+        # --- Кириллическая (или пустая) строка ---
+        skip_next_noncyrillic = False
+        flush_noncyrillic()
         result.append(line)
 
+    # Сбрасываем остаток буфера
+    flush_noncyrillic()
     return "\n".join(result)
 
 
@@ -450,29 +514,6 @@ def pdf_to_chunks(pdf_path: str) -> List[Dict[str, Any]]:
         }
         smart_chunks.append(smart_chunk)
     return smart_chunks
-
-def pdf_to_plain_text(pdf_path) -> str:
-    text = ""
-    containers = group_pages_to_containers(pdf_path)
-    for cont in containers:
-        for ch in recursive_chunking(cont, overlap_words=0):
-            normalized = normalize_text(ch["text"])
-            if not normalized.strip():
-                continue
-            text += normalized + "\n"
-
-    return text
-
-def save_plain_text(text: str, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-
-def load_plain_text(path: str) -> str:
-    out = ""
-    with open(path, "r", encoding="utf-8") as f:
-        out = f.read()
-    return out
-
 
 # ---------------------------------------------------------------------------
 # 8. Сохранение

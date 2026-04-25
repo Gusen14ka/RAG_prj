@@ -54,11 +54,7 @@ uvicorn[standard]==0.34.0
 wheel==0.46.3
 natasha
 yake
-pymorphy2
-pymorphy2-dicts-ru
-razdel
 yargy
 ipymarkup
 slovnet
 docopt
-setuptools

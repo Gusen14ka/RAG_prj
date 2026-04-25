@@ -1,171 +1,180 @@
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
+from collections import OrderedDict
 import asyncio
-from pathlib import Path
-import os
+import threading
+import time
 import uvicorn
 
-from parsing import pdf_to_chunks, save_chunks
-from embedding import (
-    build_model,
-    build_and_save_embeddings,
-    load_embeddings,
-    search as embedding_search,
+from pipeline import (
+    build_search_pipeline,
+    QUESTIONS_BANK_PATH,
+    TOP_K_RETRIEVAL,
+    TOP_K_RERANK,
+    RERANK_THRESHOLD,
+    ANSWER_THRESHOLD,
+    Q_SCORE_WEIGHT,
+    SRC_SCORE_WEIGHT,
+    GOLD_SCORE_WEIGHT,
 )
-from keyword_search import (
-    create_bm25_index_pipeline,
-    load_bm25,
-    search_bm25,
-)
+from embedding import search as embedding_search
+from keyword_search import search_bm25
 from utils.rrf_scoring import rrf_scoring
-from utils.load_chunks import load_chunks_with_key, load_chunks
-from reranker import rerank, build_reranker
+from utils.load_chunks import load_chunks
+from reranker import rerank
 from trainer_mode import Trainer, Question
-
-CHUNK_PATH          = "data/chunks.jsonl"
-CHUNK_WITH_KEY_PATH = "data/chunks_with_key.json"
-SOURCE_PDF_PATH     = "test.pdf"
-EMBEDDINGS_PATH     = "data/embeddings.npy"
-BM25_PATH           = "data/bm25.pkl"
-QUESTIONS_BANK_PATH = "data/questions_bank.jsonl"
-
-TOP_K_RETRIEVAL  = 5
-TOP_K_RERANK     = 3
-RERANK_THRESHOLD = 0.3   # чанки ниже этого score не показываем
-
-ANSWER_THRESHOLD = 0.3
-Q_SCORE_WEIGHT = 0.35
-SRC_SCORE_WEIGHT = 0.45
-GOLD_SCORE_WEIGHT = 0.20
 
 
 @asynccontextmanager
 async def lifecycle(app: FastAPI):
-    os.makedirs("data", exist_ok=True)
-    if not Path(CHUNK_PATH).exists() or not Path(CHUNK_WITH_KEY_PATH).exists():
-        if not Path(SOURCE_PDF_PATH).exists():
-            raise RuntimeError(f"Source PDF {SOURCE_PDF_PATH} not found. Please provide the PDF file.")
-        # Костыль против кривого парсинга
-        if not Path(CHUNK_PATH).exists():
-            chunks = pdf_to_chunks(SOURCE_PDF_PATH)
-        else:
-            chunks = load_chunks(CHUNK_PATH)
-        save_chunks(chunks, CHUNK_PATH, CHUNK_WITH_KEY_PATH)
-        print(f"    Created {len(chunks)} chunks.")
-    else:
-        chunks = load_chunks(CHUNK_PATH)
-        print(f"    Loaded {len(chunks)} chunks from cache.")
-    chunks_with_key = load_chunks_with_key(CHUNK_WITH_KEY_PATH)
+    # build_search_pipeline запускается синхронно при старте — это нормально,
+    # так как lifespan выполняется до приёма запросов.
+    state = build_search_pipeline(verbose=True)
 
-    embed_model  = build_model()
-    rerank_model = build_reranker()
+    trainer = Trainer(
+        state["rerank_model"], str(QUESTIONS_BANK_PATH),
+        ANSWER_THRESHOLD, Q_SCORE_WEIGHT, SRC_SCORE_WEIGHT, GOLD_SCORE_WEIGHT,
+    )
+    questions: list[Question] = []
 
-    if not Path(EMBEDDINGS_PATH).exists():
-        print("    Encoding chunks...")
-        embeddings = build_and_save_embeddings(chunks, embed_model, EMBEDDINGS_PATH)
-    else:
-        embeddings = load_embeddings(EMBEDDINGS_PATH)
-
-    if not Path(BM25_PATH).exists():
-        create_bm25_index_pipeline(CHUNK_PATH, BM25_PATH)
-    bm25 = load_bm25(BM25_PATH)
-
-    trainer = Trainer(rerank_model, QUESTIONS_BANK_PATH, ANSWER_THRESHOLD, Q_SCORE_WEIGHT, SRC_SCORE_WEIGHT, GOLD_SCORE_WEIGHT)
-    questions = []
-    if not Path(QUESTIONS_BANK_PATH).exists():
-        print("    Generating questions...")
-        for i, (chunk_id, chunk) in enumerate(chunks_with_key.items(), 1):
+    if not QUESTIONS_BANK_PATH.exists():
+        print("    Генерируем вопросы...")
+        for chunk_id, chunk in state["chunks_with_key"].items():
             generated = trainer.build_question_bank(chunk["clean_text"], chunk_id, min_score=0.65)
             questions.extend(generated)
-        print(f"    Generated {len(questions)} questions.")
+        print(f"    Сгенерировано {len(questions)} вопросов.")
         trainer.save_questions(questions)
     else:
-        print("    Loading questions from file...")
-        questions_dicts = load_chunks(QUESTIONS_BANK_PATH)
+        print("    Загружаем вопросы из файла...")
+        questions_dicts = load_chunks(str(QUESTIONS_BANK_PATH))
         questions = [Question(**d) for d in questions_dicts]
-        print(f"    Loaded {len(questions)} questions.")
+        print(f"    Загружено {len(questions)} вопросов.")
 
-    # Сохраняем все необходимые объекты
-    app.state.chunks = chunks
-    app.state.chunks_with_key = chunks_with_key
-    app.state.embed_model = embed_model
-    app.state.rerank_model = rerank_model
-    app.state.embeddings = embeddings
-    app.state.bm25 = bm25
-    app.state.trainer = trainer
-    app.state.questions = questions
+    app.state.chunks          = state["chunks"]
+    app.state.chunks_with_key = state["chunks_with_key"]
+    app.state.embed_model     = state["embed_model"]
+    app.state.rerank_model    = state["rerank_model"]
+    app.state.embeddings      = state["embeddings"]
+    app.state.bm25            = state["bm25"]
+    app.state.trainer         = trainer
+    app.state.questions       = questions
 
     print("    Lifespan complete.")
-
     yield
 
-def perform_search(
-        embed_model,
-        rerank_model,
-        bm25,
-        chunks,
-        chunks_with_key,
-        embeddings,
-        query
-):
-    res_embedding = embedding_search(embeddings, chunks, query,
-                                         model=embed_model, top_k=TOP_K_RETRIEVAL)
-    res_keyword   = search_bm25(bm25, chunks, query, top_k=TOP_K_RETRIEVAL)
 
-    res_rrf_ids  = rrf_scoring([res_embedding, res_keyword], weight_list=[1, 1])
-    res_rrf      = [chunks_with_key[x[0]] for x in res_rrf_ids]
+def perform_search(embed_model, rerank_model, bm25, chunks, chunks_with_key, embeddings, query):
+    cached = _cache_get(query)
+    if cached is not None:
+        print(f"[SEARCH] cache hit: '{query[:60]}'")
+        return cached
+
+    t0 = time.perf_counter()
+    res_embedding = embedding_search(embeddings, chunks, query,
+                                     model=embed_model, top_k=TOP_K_RETRIEVAL)
+    t_embed = time.perf_counter()
+
+    res_keyword = search_bm25(bm25, chunks, query, top_k=TOP_K_RETRIEVAL)
+    t_bm25 = time.perf_counter()
+
+    res_rrf_ids = rrf_scoring([res_embedding, res_keyword], weight_list=[1, 1])
+    res_rrf     = [chunks_with_key[x[0]] for x in res_rrf_ids]
+    t_rrf = time.perf_counter()
 
     res_rerank_ids = rerank(query, res_rrf, TOP_K_RERANK, model=rerank_model)
+    t_rerank = time.perf_counter()
 
-    # Фильтр по порогу: убираем нерелевантные чанки
-    filtered = [(cid, score) for cid, score in res_rerank_ids
-                if score >= RERANK_THRESHOLD]
-    
+    filtered = [(cid, score) for cid, score in res_rerank_ids if score >= RERANK_THRESHOLD]
+
+    embed_ms  = (t_embed  - t0)      * 1000
+    bm25_ms   = (t_bm25   - t_embed) * 1000
+    rrf_ms    = (t_rrf    - t_bm25)  * 1000
+    rerank_ms = (t_rerank - t_rrf)   * 1000
+    total_ms  = (t_rerank - t0)      * 1000
+    print(
+        f"[SEARCH] embed={embed_ms:.0f}ms  bm25={bm25_ms:.0f}ms  "
+        f"rrf={rrf_ms:.0f}ms  rerank={rerank_ms:.0f}ms  total={total_ms:.0f}ms"
+    )
+
     if not filtered:
         return []
-    
-    res = []
-    for i, (cid, score) in enumerate(filtered, 1):
-        ch   = chunks_with_key[cid]
-        text = ch.get("raw_text", "").strip()
-        res.append({"text": text, "chunk_id": cid, "score": float(score)})
 
-    return res
+    result = [
+        {"text": chunks_with_key[cid].get("raw_text", "").strip(),
+         "chunk_id": cid,
+         "score": float(score)}
+        for cid, score in filtered
+    ]
+    _cache_set(query, result)
+    return result
 
-def perform_check_answer(
-        question_id,
-        trainer,
-        questions,
-        user_answer
-):
+
+def perform_check_answer(question_id, trainer, questions, user_answer):
     question = next((q for q in questions if q.question_id == question_id), None)
     if not question:
         return {"error": "Question not found"}
-    
-    is_correct, score = trainer.check_answer(user_answer, question)
 
+    is_correct, score = trainer.check_answer(user_answer, question)
     return {
-        "is_correct": bool(is_correct),
-        "score": float(score),
+        "is_correct":      bool(is_correct),
+        "score":           float(score),
         "source_sentence": question.source_sentence,
-        "gold_answer": question.answer,
+        "gold_answer":     question.answer,
     }
 
+
+# ---------------------------------------------------------------------------
+# LRU query cache
+# ---------------------------------------------------------------------------
+_CACHE_MAX_SIZE = 64
+_search_cache: OrderedDict = OrderedDict()
+_cache_lock = threading.Lock()
+
+
+def _cache_get(key: str):
+    with _cache_lock:
+        if key not in _search_cache:
+            return None
+        _search_cache.move_to_end(key)
+        return _search_cache[key]
+
+
+def _cache_set(key: str, value) -> None:
+    with _cache_lock:
+        if key in _search_cache:
+            _search_cache.move_to_end(key)
+        _search_cache[key] = value
+        if len(_search_cache) > _CACHE_MAX_SIZE:
+            _search_cache.popitem(last=False)
 
 
 app = FastAPI(title="NON LLM RAG", version="1.0.0", lifespan=lifecycle)
 
+# CORS — нужен при запуске фронтенда через Live Server (Go Live)
+# В Docker запросы идут через nginx в той же origin — CORS не нужен
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 class SearchRequest(BaseModel):
     query: str
+
 
 class CheckAnswerRequest(BaseModel):
     question_id: str
     user_answer: str
 
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
 
 @app.post("/search")
 async def search(body: SearchRequest, request: Request):
@@ -178,12 +187,13 @@ async def search(body: SearchRequest, request: Request):
             request.app.state.chunks,
             request.app.state.chunks_with_key,
             request.app.state.embeddings,
-            body.query
+            body.query,
         )
         return {"result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @app.post("/check_answer")
 async def check_answer(body: CheckAnswerRequest, request: Request):
     try:
@@ -192,14 +202,15 @@ async def check_answer(body: CheckAnswerRequest, request: Request):
             body.question_id,
             request.app.state.trainer,
             request.app.state.questions,
-            body.user_answer
+            body.user_answer,
         )
         if "error" in result:
             raise HTTPException(status_code=404, detail=result["error"])
         return {"result": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @app.get("/questions")
 async def get_question(request: Request):
     def serialize_question(q):
@@ -213,5 +224,3 @@ async def get_question(request: Request):
 
 if __name__ == "__main__":
     uvicorn.run("api:app", host="0.0.0.0", port=8000, reload=True)
-
-    

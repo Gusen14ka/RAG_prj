@@ -4,10 +4,20 @@ from rank_bm25 import BM25Okapi
 from utils.load_chunks import load_chunks
 import pickle
 
-morph = MorphAnalyzer()
+# Ленивая инициализация: MorphAnalyzer создаётся при первом вызове tokenize_lemmatize,
+# а не при импорте модуля (избегаем лишнего времени старта).
+_morph: MorphAnalyzer | None = None
+
+
+def _get_morph() -> MorphAnalyzer:
+    global _morph
+    if _morph is None:
+        _morph = MorphAnalyzer()
+    return _morph
 
 
 def tokenize_lemmatize(text: str):
+    morph = _get_morph()
     tokens = [t.text for t in razdel_tokenize(text)]
     lemmas = []
     for tok in tokens:
@@ -33,7 +43,7 @@ def search(bm25, chunks, query, k=3):
     results = []
     for i in top_k:
         results.append({
-            "score": float(score[i]),
+            "score":    float(score[i]),
             "chunk_id": chunks[i].get("chunk_id"),
             "raw_text": chunks[i].get("raw_text"),
             "metadata": chunks[i].get("metadata")

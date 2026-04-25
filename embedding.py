@@ -1,4 +1,4 @@
-# embed_and_index.py
+# embedding.py
 #
 # faiss заменён на numpy dot-product — faiss конфликтует с CrossEncoder (OpenMP)
 # на macOS ARM: faiss.read_index блокирует OMP thread pool, после чего
@@ -6,7 +6,6 @@
 
 from sentence_transformers import SentenceTransformer
 import numpy as np
-import json
 
 # -------------------------
 MODEL_NAME       = "models/multilingual-e5-large"
@@ -66,30 +65,10 @@ def search(embeddings: np.ndarray, chunks: list, query: str,
     results = []
     for idx in top_ids:
         results.append({
-            "faiss_id": int(idx),
-            "score":    float(scores[idx]),
-            "chunk_id": chunks[idx].get("chunk_id"),
-            "raw_text": chunks[idx].get("raw_text"),
-            "metadata": chunks[idx].get("metadata"),
+            "array_idx": int(idx),
+            "score":     float(scores[idx]),
+            "chunk_id":  chunks[idx].get("chunk_id"),
+            "raw_text":  chunks[idx].get("raw_text"),
+            "metadata":  chunks[idx].get("metadata"),
         })
     return results
-
-
-def load_chunks(fname: str = "chunks.jsonl") -> list:
-    data = []
-    with open(fname, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                data.append(json.loads(line))
-    return data
-
-
-if __name__ == "__main__":
-    chunks = load_chunks("data/chunks.jsonl")
-    model  = build_model()
-    emb    = build_and_save_embeddings(chunks, model)
-    res    = search(emb, chunks, "Из чего состоит мультимножество", model, top_k=3)
-    for ch in res:
-        print(ch)
-        print()
