@@ -42,10 +42,16 @@ PDF
 ```
 RAG_prj/
 ├── main.py                        — точка входа, основной pipeline
+├── api.py                         — FastAPI backend для Docker / веб-UI
 ├── parsing.py                     — PDF → чанки
 ├── embedding.py                   — векторный поиск (numpy)
 ├── keyword_search.py              — BM25 поиск
 ├── reranker.py                    — CrossEncoder переранжирование
+├── docker-compose.yml             — Docker сервисы backend + nginx frontend
+├── Dockerfile                     — образ бэкенда с Python и моделями
+├── nginx/
+│   ├── Dockerfile                 — образ frontend на nginx
+│   └── nginx.conf                 — прокси на backend
 ├── config/
 │   ├── models_config.json         — список моделей для скачивания
 │   └── requirements.txt           — зависимости
@@ -66,7 +72,8 @@ RAG_prj/
 ## Требования
 
 - Python 3.10+
-- ~2.5 GB свободного места (модели)
+- ~2.5 GB свободного места для локального Python-окружения и моделей
+- Для Docker-сервиса рекомендуется иметь до 25 GB свободного места — образы и контейнеры могут занять значительную часть диска
 - ~4 GB RAM
 
 ---
@@ -95,6 +102,36 @@ pip install -r config/requirements.txt
 
 ---
 
+## Docker
+
+Проект можно запускать через Docker Compose: backend на Python + nginx frontend.
+
+```bash
+docker compose up --build
+```
+
+или, если используется старая версия Docker:
+
+```bash
+docker-compose up --build
+```
+
+> Важно: образы и контейнеры могут занимать до 25 GB на диске. Перед запуском проверьте свободное место.
+
+Чтобы остановить и удалить контейнеры:
+
+```bash
+docker compose down
+```
+
+Чтобы удалить образ и освободить пространство:
+
+```bash
+docker system prune -a
+```
+
+---
+
 ## Скачивание моделей
 
 Модели скачиваются один раз (~2.3 GB):
@@ -115,9 +152,17 @@ python  scripts/ensure_models.py   # Windows
 
 Положите свой PDF как `test.pdf` в корень проекта (или используйте уже имеющийся).
 
+### Локально
+
 ```bash
 python3 main.py   # macOS / Linux
 python  main.py   # Windows
+```
+
+### В Docker
+
+```bash
+docker compose up --build
 ```
 
 > **Важно:** запускать из корневой директории проекта.
@@ -155,8 +200,8 @@ python  main.py   # Windows
 
 | Модель | Задача | Размер |
 |--------|--------|--------|
-| [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large) | Embedding (векторный поиск) | ~1.2 GB |
-| [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3) | Reranking (CrossEncoder) | ~1.1 GB |
+| [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large) | Embedding (векторный поиск) | ~4.2 GB |
+| [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)ы | Reranking (CrossEncoder) | ~1.1 GB |
 
 ---
 
@@ -181,46 +226,3 @@ python  main.py   # Windows
 | macOS x86 | ✅ Должно работать |
 | Linux | ✅ Должно работать |
 | Windows 10/11 | ✅ Должно работать |
-
-> На macOS используется numpy вместо faiss во избежание конфликта OpenMP между torch и faiss.
-
----
-
-## Изменения относительно ветки main
-
-### Критические баги — исправлены
-
-| Файл | Проблема | Исправление |
-|------|----------|-------------|
-| `reranker.py:24` | Сортировка по `x[0]` (chunk_id) вместо `x[1]` (score) — результаты выдавались в случайном порядке | `key=lambda x: x[1]` |
-| `reranker.py:8` | Неверная аннотация возвращаемого типа `List[str]` | `List[Tuple[str, float]]` |
-| `parsing.py:273` | `save_chunks(chunks, output_file)` — передавался только 1 путь вместо 2 | добавлен `output_file_with_key` |
-| `parsing.py:12` | `HEADER_RE = pattern = re.compile(...)` — лишний псевдоним `pattern` | `HEADER_RE = re.compile(...)` |
-| `parsing.py:41` | Дублирующий `import re` в середине файла | удалён |
-| `parsing.py:160` | `m.group(1).strip()` без проверки — `group(1)` опциональна, `None.strip()` → `AttributeError` | добавлена проверка `m.group(1) is not None` |
-| `keyword_search.py:65,75,86` | Пути с `\\` (Windows-стиль) — не работали на macOS/Linux | заменены на `/` |
-| `embedding.py:95` | `build_model()` вызывался внутри `search()` — модель перезагружалась при каждом запросе | модель передаётся как параметр |
-| `reranker.py:10` | `CrossEncoder` создавался внутри `rerank()` — модель перезагружалась при каждом запросе | добавлен `build_reranker()`, модель передаётся снаружи |
-| `scripts/ensure_models.py:25` | `open("config/models_config.json")` без `encoding` — падал на Windows | добавлен `encoding="utf-8"` |
-| `config/requirements.txt` | Файл в кодировке UTF-16 — `pip install` не мог его прочитать | перезаписан в UTF-8 |
-
-### Архитектурные улучшения
-
-| Файл | Что изменено |
-|------|-------------|
-| `embedding.py` | `faiss` заменён на `numpy` dot-product — устранён segfault (конфликт OpenMP faiss + torch на macOS ARM) |
-| `embedding.py` | Функции переименованы: `build_and_save_faiss_index` → `build_and_save_embeddings`, `load_index_and_metadata` → `load_embeddings` |
-| `keyword_search.py` | Добавлена `search_bm25(bm25, chunks, query)` — поиск без I/O по готовым объектам |
-| `keyword_search.py` | `save_index` больше не сохраняет `bm25_tokenized` — он не нужен для поиска |
-| `reranker.py` | Добавлена `build_reranker()` — явная точка инициализации модели |
-| `scripts/ensure_models.py` | Пути через `pathlib.Path` — кроссплатформенно; `model_path.mkdir(parents=True)` |
-| `main.py` | Полный рефакторинг: модели загружаются **один раз** при старте, затем переиспользуются в цикле |
-| `main.py` | Добавлен фильтр по порогу `RERANK_THRESHOLD = 0.3` — нерелевантные чанки не показываются |
-| `main.py` | Добавлена проверка наличия `test.pdf` перед парсингом |
-| `main.py` | `os.makedirs("data", exist_ok=True)` — папка `data/` создаётся автоматически |
-| `main.py` | UTF-8 вывод на Windows (`sys.stdout.reconfigure`) |
-| `main.py` | Хардкод запроса заменён на `input()` с циклом и командой выхода |
-
-### Порядок загрузки (критично для macOS ARM)
-
-В `main.py` модели (`build_model`, `build_reranker`) загружаются **до** любых операций с numpy-индексами. Это предотвращает конфликт потоков OpenMP между torch и faiss/numpy на Apple Silicon.
