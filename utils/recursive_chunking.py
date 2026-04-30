@@ -1,20 +1,20 @@
-from typing import List, Dict, Optional
+from typing import Optional
+
+from entities import (
+    PageContrainer,
+    ChunkMetaData,
+    Chunk
+)
 
 def recursive_chunking(
-    section_obj: Dict,
+    section_obj: PageContrainer,
     chunk_size_words: int = 200,
     overlap_words: int = 20,
-    separators: Optional[List[str]] = None,
-) -> List[Dict[str, str]]:
-    """
-    Recursive chunking.
-    Input: section_obj = {"section_id": sec, "page_texts": ptext}
-           where ptext is List[str] (texts of pages)
-    Output: List[{"chunk_id": "section_id:n", "text": "..."}]
-    """
-    section_id = section_obj.get("section_id", "")
-    page_texts = section_obj.get("page_texts", [])
-    metadata = section_obj.get("metadata", {"section":"", "subsection":""})
+    separators: Optional[list[str]] = None,
+) -> list[Chunk]:
+    section_id = section_obj.section_id
+    page_texts = section_obj.page_texts
+    metadata = section_obj.metadata
     if separators is None:
         # порядок сепараторов: сначала крупные (абзацы), затем мелкие (слова)
         separators = ["\n\n", "\n", ". ", "; ", ", ", " "]
@@ -27,7 +27,7 @@ def recursive_chunking(
 
     # рекурсивно разбивает текст на сегменты, не превышающие chunk_size_words,
     # пытаясь использовать каждый сепаратор по очереди
-    def split_recursive(text: str, sep_idx: int = 0) -> List[str]:
+    def split_recursive(text: str, sep_idx: int = 0) -> list[str]:
         text = text.strip()
         if not text:
             return []
@@ -55,7 +55,7 @@ def recursive_chunking(
         if len(parts) == 1:
             return split_recursive(text, sep_idx + 1)
 
-        result: List[str] = []
+        result: list[str] = []
         for part in parts:
             # рекурсивно обрабатываем каждую часть
             result.extend(split_recursive(part, sep_idx + 1))
@@ -66,11 +66,11 @@ def recursive_chunking(
 
     # теперь собираем финальные чанки: аккуратно группируем сегменты в чанки до chunk_size_words,
     # и применяем overlap (в словах)
-    chunks: List[Dict[str, str]] = []
-    current_parts: List[str] = []
+    chunks: list[Chunk] = []
+    current_parts: list[str] = []
     current_words = 0
 
-    def make_chunk_from_parts(parts: List[str]) -> str:
+    def make_chunk_from_parts(parts: list[str]) -> str:
         return " ".join(p.strip() for p in parts if p and p.strip())
 
     i = 0
@@ -81,7 +81,7 @@ def recursive_chunking(
         # тогда вынем его как отдельный chunk (всё равно не превышает, т.к. жёсткий сплит уже сделал куски)
         if seg_wc >= chunk_size_words and current_words == 0:
             chunk_text = seg.strip()
-            chunks.append({"chunk_id": f"{section_id}:{len(chunks)+1}", "text": chunk_text, "metadata": metadata})
+            chunks.append(Chunk(f"{section_id}:{len(chunks)+1}", chunk_text, chunk_text, metadata))
             i += 1
             continue
 
@@ -93,7 +93,7 @@ def recursive_chunking(
             # если ровно достигли — создаём chunk
             if current_words >= chunk_size_words:
                 chunk_text = make_chunk_from_parts(current_parts)
-                chunks.append({"chunk_id": f"{section_id}:{len(chunks)+1}", "text": chunk_text, "metadata": metadata})
+                chunks.append(Chunk(f"{section_id}:{len(chunks)+1}", chunk_text, chunk_text, metadata))
                 # подготовка к следующему чанку: оставляем overlap_words последних слов
                 last_words = chunk_text.split()[-overlap_words:] if overlap_words > 0 else []
                 current_parts = [" ".join(last_words)] if last_words else []
@@ -103,14 +103,14 @@ def recursive_chunking(
             # закрываем текущий chunk и не потребляем сегмент (оставим его на следующую итерацию)
             if current_parts:
                 chunk_text = make_chunk_from_parts(current_parts)
-                chunks.append({"chunk_id": f"{section_id}:{len(chunks)+1}", "text": chunk_text, "metadata": metadata})
+                chunks.append(Chunk(f"{section_id}:{len(chunks)+1}", chunk_text, chunk_text, metadata))
                 last_words = chunk_text.split()[-overlap_words:] if overlap_words > 0 else []
                 current_parts = [" ".join(last_words)] if last_words else []
                 current_words = len(last_words)
             else:
                 # текущих частей нет, а сегмент сам слишком большой — вынести его один
                 chunk_text = seg
-                chunks.append({"chunk_id": f"{section_id}:{len(chunks)+1}", "text": chunk_text, "metadata": metadata})
+                chunks.append(Chunk(f"{section_id}:{len(chunks)+1}", chunk_text, chunk_text, metadata))
                 i += 1
                 current_parts = []
                 current_words = 0
@@ -119,6 +119,6 @@ def recursive_chunking(
     if current_parts:
         chunk_text = make_chunk_from_parts(current_parts)
         if chunk_text.strip():
-            chunks.append({"chunk_id": f"{section_id}:{len(chunks)+1}", "text": chunk_text, "metadata": metadata})
+            chunks.append(Chunk(f"{section_id}:{len(chunks)+1}", chunk_text, chunk_text, metadata))
 
     return chunks

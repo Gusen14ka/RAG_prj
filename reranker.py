@@ -1,5 +1,6 @@
 from sentence_transformers import CrossEncoder
-from typing import List, Dict, Any, Tuple, Optional
+from typing import Optional
+from entities import Chunk
 
 MODEL_NAME = "models/bge-reranker-v2-m3"
 
@@ -11,10 +12,10 @@ def build_reranker(model_name: str = MODEL_NAME) -> CrossEncoder:
 
 def rerank(
         query: str,
-        chunks: List[Dict[str, Any]],
+        chunks: list[Chunk],
         top_k: int,
         model: Optional[CrossEncoder] = None,  # ИСПРАВЛЕНО: принимаем готовую модель
-) -> List[Tuple[str, float]]:              # ИСПРАВЛЕНО: правильная аннотация типа
+) -> list[tuple[str, float]]:              # ИСПРАВЛЕНО: правильная аннотация типа
 
     if model is None:
         model = build_reranker()
@@ -22,14 +23,13 @@ def rerank(
     pairs = []
     chunks_ids = []
     for ch in chunks:
-        text = ch["raw_text"]
+        text = ch.raw_text
         pairs.append([query, text])
-        chunks_ids.append(ch["chunk_id"])
+        chunks_ids.append(ch.chunk_id)
 
     if not pairs:
         return []
 
     scores = model.predict(pairs, show_progress_bar=False, convert_to_numpy=True)
 
-    # ИСПРАВЛЕНО: сортировка по x[1] (score), а не x[0] (chunk_id)
     return sorted(zip(chunks_ids, scores), key=lambda x: x[1], reverse=True)[:top_k]

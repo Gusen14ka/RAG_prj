@@ -13,9 +13,17 @@ services:
       test: ["CMD", "python", "-c",
             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 1m30s
-      timeout: 30s
+      timeout: 1m
       retries: 5
-      start_period: 2m
+      start_period: 5m
+    volumes:
+      - ./models:/app/models
+      - ./data:/app/data
+    runtime: nvidia
+    environment:
+      WORK_DIR: /app
+      NVIDIA_VISIBLE_DEVICES: all
+
   
   frontend:
     build:

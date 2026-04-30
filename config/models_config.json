@@ -1,12 +1,19 @@
 {
   "models": [
     {
+      "type": "biencoder",
       "name": "intfloat/multilingual-e5-large",
       "path": "models/multilingual-e5-large"
     },
     {
+      "type": "crossencoder",
       "name": "BAAI/bge-reranker-v2-m3",
       "path": "models/bge-reranker-v2-m3"
+    },
+    {
+      "type": "llm",
+      "name": "Qwen/Qwen2.5-3B-Instruct",
+      "path": "models/qwen2.5-3b"
     }
   ]
 }

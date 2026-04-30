@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>NonLLM RAG System</title>
+<title>RAG System</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -307,7 +307,7 @@
 <div class="app">
 
   <div class="header">
-    <h1>Non LLM RAG система</h1>
+    <h1>LLM RAG система</h1>
     <p>Тренажёр и учебник на основе пособия "Дискретная математика для программистов"</p>
   </div>
 
@@ -315,6 +315,12 @@
   <div class="mode-bar" role="tablist">
     <button class="mode-btn active" id="btn-study" onclick="setMode('study')">Учебник</button>
     <button class="mode-btn" id="btn-trainer" onclick="setMode('trainer')">Тренажёр</button>
+  </div>
+
+  <!-- Search mode switcher -->
+  <div class="mode-bar" id="llm-bar">
+    <button class="mode-btn active" id="btn-no-llm" onclick="setSearchMode(false)">Без LLM</button>
+    <button class="mode-btn" id="btn-llm" onclick="setSearchMode(true)">С LLM</button>
   </div>
 
   <!-- TRAINER PANEL -->
@@ -368,6 +374,7 @@ let currentQuestion = null;
 let searchResults = [];
 let logsVisible = false;
 const logs = [];
+let useLLM = false;
 
 /* ─── UTILS ─── */
 function ts() {
@@ -431,6 +438,14 @@ function setMode(mode) {
   document.getElementById('btn-study').classList.toggle('active', mode === 'study');
   document.getElementById('panel-trainer').classList.toggle('open', mode === 'trainer');
   document.getElementById('panel-study').classList.toggle('open', mode === 'study');
+  document.getElementById('llm-bar').style.display = mode === 'trainer' ? 'none' : '';
+}
+
+function setSearchMode(v) {
+  useLLM = v;
+  document.getElementById('btn-no-llm').classList.toggle('active', !v);
+  document.getElementById('btn-llm').classList.toggle('active', v);
+  // Показываем LLM-бар только в режиме учебника
 }
 
 /* ─── TRAINER ─── */
@@ -478,35 +493,14 @@ async function checkAnswer() {
   btn.innerHTML = '<span class="spinner"></span>Проверяю...';
   try {
     const data = await apiFetch('/check_answer', 'POST', {
-      question_id: currentQuestion.question_id,
+      question_id: Number(currentQuestion.question_id),
       user_answer: ans,
     });
     const r = data.result;
-    const isCorrect = r.is_correct;
-    const resultEl = document.getElementById('trainer-result');
-    resultEl.innerHTML = `
-      <div class="result-badge ${isCorrect ? 'correct' : 'wrong'}">
-        ${isCorrect ? '✓ Правильно' : '✗ Неверно'}
-      </div>
-      <div class="source-block">
-        <div class="source-label">Источник</div>
-        ${escHtml(r.source_sentence)}
-      </div>
-      ${!isCorrect ? `<div class="source-block" style="margin-top:8px;border-left-color:#E24B4A;">
-        <div class="source-label">Правильный ответ</div>
-        ${escHtml(r.gold_answer)}
-      </div>` : ''}
-    `;
+    // r: { is_correct, score, gold_answers: string[], source_chunks: Chunk[] }
+    renderCheckResult(r);
     btn.disabled = false;
     btn.textContent = 'Проверить';
-
-    const nextRow = document.querySelector('.next-btn-row');
-    if (!nextRow) {
-      const row = document.createElement('div');
-      row.className = 'next-btn-row';
-      row.innerHTML = '<button class="secondary" onclick="nextQuestion()">Следующий вопрос →</button>';
-      document.getElementById('trainer-result').after(row);
-    }
   } catch (e) {
     document.getElementById('trainer-result').innerHTML = `<div style="color:var(--danger-text);font-size:13px;">Ошибка: ${e.message}</div>`;
     btn.disabled = false;
@@ -514,19 +508,77 @@ async function checkAnswer() {
   }
 }
 
+function renderCheckResult(r) {
+  const isCorrect = r.is_correct;
+  const score = Math.round((r.score || 0) * 100);
+  const goldAnswers = r.gold_answers || [];
+  const sourceChunks = r.source_chunks || [];
+
+  const resultEl = document.getElementById('trainer-result');
+  resultEl.innerHTML = `
+    <div class="result-badge ${isCorrect ? 'correct' : 'wrong'}">
+      ${isCorrect ? '✓ Правильно' : '✗ Неверно'} · ${score}%
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
+      ${goldAnswers.length ? `<button class="secondary" onclick="toggleTrainerSection('gold-answers-block')">Правильные ответы</button>` : ''}
+      ${sourceChunks.length ? `<button class="secondary" onclick="toggleTrainerSection('source-chunks-block')">Источники</button>` : ''}
+      <button class="secondary" onclick="nextQuestion()">Следующий вопрос →</button>
+    </div>
+
+    ${goldAnswers.length ? `
+    <div id="gold-answers-block" style="display:none;margin-top:12px;">
+      <div class="extra-sources-label">Правильные ответы</div>
+      ${goldAnswers.map(a => `
+        <div class="source-block" style="margin-bottom:6px;">
+          ${escHtml(a)}
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    ${sourceChunks.length ? `
+    <div id="source-chunks-block" style="display:none;margin-top:12px;">
+      <div class="extra-sources-label">Источники</div>
+      ${sourceChunks.map((ch, i) => `
+        <div class="chunk-card${i === 0 ? ' main-chunk' : ''}">
+          <div class="chunk-meta">
+            ${i === 0 ? '<span class="chunk-badge">Основной</span>' : ''}
+            <span>Источник: ${escHtml(ch.chunk_id)}</span>
+            ${ch.metadata ? `<span>${escHtml(ch.metadata.section)}${ch.metadata.subsection ? ' · ' + escHtml(ch.metadata.subsection) : ''}</span>` : ''}
+          </div>
+          <div class="chunk-text">${escHtml(ch.raw_text)}</div>
+        </div>
+      `).join('')}
+    </div>` : ''}
+  `;
+}
+
+function toggleTrainerSection(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const isOpen = el.style.display !== 'none';
+  el.style.display = isOpen ? 'none' : 'block';
+}
+
 /* ─── STUDY ─── */
 async function doSearch() {
   const q = document.getElementById('search-input').value.trim();
   if (!q) return;
+
   const btn = document.getElementById('search-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Ищу...';
   document.getElementById('search-results').innerHTML = '<div class="empty"><span class="spinner"></span> Поиск...</div>';
 
   try {
-    const data = await apiFetch('/search', 'POST', { query: q });
-    searchResults = data.result || [];
-    renderResults();
+    const path = useLLM ? '/search_llm' : '/search';
+    const data = await apiFetch(path, 'POST', { query: q });
+
+    if (useLLM) {
+      renderLLMResult(data.result);
+    } else {
+      searchResults = data.result || [];
+      renderResults();
+    }
   } catch (e) {
     document.getElementById('search-results').innerHTML = `<div class="empty" style="color:var(--danger-text)">Ошибка: ${e.message}</div>`;
   } finally {
@@ -549,9 +601,9 @@ function renderResults(showAll = false) {
     <div class="chunk-card main-chunk">
       <div class="chunk-meta">
         <span class="chunk-badge">Лучший результат</span>
-        <span>Источник: ${escHtml(main.chunk_id)}</span>
+        <span>Источник: ${escHtml(main.chunk.chunk_id)}</span>
       </div>
-      <div class="chunk-text">${escHtml(main.text)}</div>
+      <div class="chunk-text">${escHtml(main.chunk.raw_text)}</div>
     </div>
   `;
 
@@ -565,15 +617,67 @@ function renderResults(showAll = false) {
       html += `
         <div class="chunk-card">
           <div class="chunk-meta">
-            <span>Источник: ${escHtml(ch.chunk_id)}</span>
+            <span>Источник: ${escHtml(ch.chunk.chunk_id)}</span>
           </div>
-          <div class="chunk-text">${escHtml(ch.text)}</div>
+          <div class="chunk-text">${escHtml(ch.chunk.raw_text)}</div>
         </div>
       `;
     });
   }
 
   el.innerHTML = html;
+}
+
+function renderLLMResult(data) {
+  const el = document.getElementById('search-results');
+
+  const answer = data.llm_answer;
+  const sources = data.chunks_response || [];
+  const chunkIds = sources.map(item => item.chunk.chunk_id);
+
+  let html = `
+    <div class="card">
+      <div class="question-text">${escHtml(answer)}</div>
+
+      <div class="chunk-meta" style="margin-top:8px;">
+        Использованы chunk_id: ${chunkIds.join(', ')}
+      </div>
+
+      <div class="show-more-row">
+        <button class="secondary" id="toggle-btn">Показать источники</button>
+      </div>
+
+      <div id="llm-sources" style="display:none;"></div>
+    </div>
+  `;
+
+  el.innerHTML = html;
+
+  const btn = document.getElementById('toggle-btn');
+  const container = document.getElementById('llm-sources');
+
+  let opened = false;
+
+  btn.onclick = () => {
+    opened = !opened;
+    container.style.display = opened ? 'block' : 'none';
+    btn.textContent = opened ? 'Скрыть источники' : 'Показать источники';
+
+    if (opened && !container.innerHTML) {
+      let html = `<div class="extra-sources-label">Источники</div>`;
+      sources.forEach(resp => {
+        html += `
+          <div class="chunk-card">
+            <div class="chunk-meta">
+              <span>Источник: ${escHtml(resp.chunk.chunk_id)}</span>
+            </div>
+            <div class="chunk-text">${escHtml(resp.chunk.raw_text)}</div>
+          </div>
+        `;
+      });
+      container.innerHTML = html;
+    }
+  };
 }
 
 function escHtml(s) {

@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.9-slim
 
 WORKDIR /app
 
@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY config/requirements.txt config/requirements.txt
 
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r config/requirements.txt
+    pip install --no-cache-dir -r config/requirements.txt \
+    --extra-index-url https://download.pytorch.org/whl/cu121
 
 # Копируем исходный код
 COPY . .
