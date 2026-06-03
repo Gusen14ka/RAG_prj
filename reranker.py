@@ -14,22 +14,20 @@ def rerank(
         query: str,
         chunks: list[Chunk],
         top_k: int,
-        model: Optional[CrossEncoder] = None,  # ИСПРАВЛЕНО: принимаем готовую модель
-) -> list[tuple[str, float]]:              # ИСПРАВЛЕНО: правильная аннотация типа
+        model: Optional[CrossEncoder] = None,
+) -> list[tuple[Chunk, float]]:
 
     if model is None:
         model = build_reranker()
 
     pairs = []
-    chunks_ids = []
     for ch in chunks:
         text = ch.raw_text
         pairs.append([query, text])
-        chunks_ids.append(ch.chunk_id)
 
     if not pairs:
         return []
 
     scores = model.predict(pairs, show_progress_bar=False, convert_to_numpy=True)
 
-    return sorted(zip(chunks_ids, scores), key=lambda x: x[1], reverse=True)[:top_k]
+    return sorted(zip(chunks, scores), key=lambda x: x[1], reverse=True)[:top_k]

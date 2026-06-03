@@ -34,6 +34,9 @@ class Chunk:
     raw_text: str
     metadata: ChunkMetaData
 
+    def __hash__(self):
+        return hash(self.chunk_id)
+
 @dataclass
 class ResponseRagSearch:
     chunk: Chunk
