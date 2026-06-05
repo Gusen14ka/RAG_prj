@@ -147,12 +147,6 @@ hf_cache/
 !nginx/
 !nginx/nginx.conf
 
-# Чтобы честно оценить размер приложения не пользуемся volume и копируем модели
-!models/
-!models/multilingual-e5-large
-!models/bge-reranker-v2-m3
-!models/multilingual-e5-large/**
-!models/bge-reranker-v2-m3/**
 
 # =========================
 
@@ -163,6 +157,3 @@ test_embeddings.py
 .gitignore
 README.md
 
-# Пока что копируем data, но вообще не нужно
-!data/
-!data/**

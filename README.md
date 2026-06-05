@@ -41,30 +41,30 @@ PDF
 
 ```
 RAG_prj/
-├── main.py                        — точка входа, основной pipeline
+├── main.py                        — CLI: режимы "тренажёр" и "учебник"
 ├── api.py                         — FastAPI backend для Docker / веб-UI
-├── parsing.py                     — PDF → чанки
-├── embedding.py                   — векторный поиск (numpy)
-├── keyword_search.py              — BM25 поиск
-├── reranker.py                    — CrossEncoder переранжирование
-├── docker-compose.yml             — Docker сервисы backend + nginx frontend
+├── parsing.py                     — PDF → контейнеры страниц → чанки
+├── embedding.py                   — сборка/поиск эмбеддингов (numpy + sentence-transformers)
+├── keyword_search.py              — BM25 поиск (rank-bm25)
+├── reranker.py                    — CrossEncoder / reranker
+├── docker-compose.yml             — Docker сервисы: backend + nginx frontend
 ├── Dockerfile                     — образ бэкенда с Python и моделями
 ├── nginx/
 │   ├── Dockerfile                 — образ frontend на nginx
 │   └── nginx.conf                 — прокси на backend
 ├── config/
-│   ├── models_config.json         — список моделей для скачивания
-│   └── requirements.txt           — зависимости
+│   ├── models_config.json         — список моделей для загрузки
+│   └── requirements.txt           — Python-зависимости (указаны в config/requirements.txt)
 ├── scripts/
-│   └── ensure_models.py           — скачивание моделей с HuggingFace
+│   └── ensure_models.py           — скачивание моделей (HuggingFace, локально)
 ├── utils/
 │   ├── recursive_chunking.py      — рекурсивный чанкер
 │   ├── rrf_scoring.py             — Reciprocal Rank Fusion
-│   ├── load_chunks.py             — загрузка .jsonl / .json
-│   └── group_pages_to_containers.py
-├── models/                        — локальные модели (не в git)
-├── data/                          — кэш чанков и индексов (не в git)
-└── test.pdf                       — тестовый документ
+│   ├── load.py                    — функции загрузки JSON / JSONL и чаргов
+│   └── save.py                    — функции сохранения чанков и индексов
+├── models/                        — локальные модели (внешние веса не в репозитории)
+├── data/                          — кэш чанков, эмбеддингов и индексов (не в git)
+└── frontend/index.html            — минимальный UI
 ```
 
 ---
@@ -72,9 +72,9 @@ RAG_prj/
 ## Требования
 
 - Python 3.10+
-- ~2.5 GB свободного места для локального Python-окружения и моделей
-- Для Docker-сервиса рекомендуется иметь до 25 GB свободного места — образы и контейнеры могут занять значительную часть диска
-- ~4 GB RAM
+- Свободное место: минимально несколько гигабайт для моделей и кэшей; для полноценной работы с Docker образами рекомендуется иметь ~25 GB свободного места
+- RAM: рекомендуется ≥4 GB (чем больше — тем комфортнее при инференсе)
+- GPU: опционально. Проект может использовать CUDA для LLM и/или эмбеддингов, но это не обязательно.
 
 ---
 
@@ -134,7 +134,7 @@ docker system prune -a
 
 ## Скачивание моделей
 
-Модели скачиваются один раз (~2.3 GB):
+Скрипт `scripts/ensure_models.py` загружает модели, указанные в `config/models_config.json`, в папку `models/`.
 
 ```bash
 python3 scripts/ensure_models.py   # macOS / Linux
@@ -143,21 +143,24 @@ python  scripts/ensure_models.py   # Windows
 
 Модели сохраняются в `models/` и не попадают в git.
 
-> Если получаете предупреждение `unauthenticated requests to HF Hub` — скорость ограничена.
-> Для ускорения: `export HF_TOKEN=hf_ваш_токен` (токен бесплатно на huggingface.co).
+Если появляется предупреждение про `unauthenticated requests to HF Hub`, скорость может быть ограничена. Для ускорения можно установить переменную окружения `HF_TOKEN` с вашим токеном HuggingFace.
 
 ---
 
 ## Запуск
 
-Положите свой PDF как `test.pdf` в корень проекта (или используйте уже имеющийся).
+Положите свой PDF как `data/source.pdf` или укажите путь в `config/paths.py` (по умолчанию используется `data/source.pdf`).
 
-### Локально
+### Локально (CLI)
 
 ```bash
 python3 main.py   # macOS / Linux
 python  main.py   # Windows
 ```
+
+CLI имеет два режима:
+- `Тренажёр` — показывает случайные вопросы из банка и позволяет проверять ответы;
+- `Учебник` — интерактивный поиск: с LLM (генерация ответа из найденных контекстов) и без LLM (только релевантные чанки).
 
 ### В Docker
 
@@ -165,56 +168,42 @@ python  main.py   # Windows
 docker compose up --build
 ```
 
-> **Важно:** запускать из корневой директории проекта.
-> Если хотите обработать другой PDF — удалите папку `data/` перед запуском.
+Важно запускать из корневой директории проекта. Если вы хотите заново построить чанки/индексы для другого PDF — удалите содержимое `data/` и перезапустите.
 
-### Ожидаемый вывод
+### Ожидаемый вывод (пример)
 
 ```
-[1/5] Чанкинг PDF...
-    Создано 14 чанков.
-[2/5] Загрузка моделей...
-    Модели загружены.
-[3/5] Векторный индекс (numpy)...
-    Эмбеддингов: (14, 1024)
-[4/5] BM25 индекс...
-    BM25 загружен.
-
-[5/5] Система готова. Введите 'выход' для завершения.
-
-Введите запрос: парадокс Рассела
-
-────────────────────────────────────────────────────────────
-Топ-2 результатов для: «парадокс Рассела»
-────────────────────────────────────────────────────────────
-
-[1] chunk_id: 1.1.3:1  score=0.9800
-Раздел: Множества и отношения
-Подраздел: Парадокс Рассела
-...
+Created 14 chunks.
+Loading LLM model...
+LLM susscesfully loaded
+Embedding model will use CPU
+Encoding chunks...
+Loaded 14 chunks from cache.
+System ready. Введите запрос.
 ```
 
 ---
 
 ## Используемые модели
 
-| Модель | Задача | Размер |
-|--------|--------|--------|
-| [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large) | Embedding (векторный поиск) | ~4.2 GB |
-| [BAAI/bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)ы | Reranking (CrossEncoder) | ~1.1 GB |
+Модели и их назначения указываются в `config/models_config.json`. В репозитории в папке `models/` ожидаются локальные копии моделей (скрипт `scripts/ensure_models.py` загружает их).
+
+- `multilingual-e5-*` — модель эмбеддингов (используется для векторного поиска через нормализованные эмбеддинги).
+- `bge-reranker*` или аналогичный cross-encoder — используется для финального переранжирования кандидатов.
+- `qwen2.5-3b` (или другая LLM) — используется как локальная LLM для генерации ответов и переформулировки запросов (в `llm.py` реализована загрузка модели с возможностью 4-bit квантования для экономии памяти).
 
 ---
 
 ## Зависимости
 
-| Пакет | Назначение |
-|-------|------------|
-| `pdfminer.six` | Извлечение текста из PDF |
-| `sentence-transformers` | Загрузка и инференс моделей |
-| `numpy` | Векторный поиск (dot-product) |
-| `rank-bm25` | BM25 индекс |
-| `pymorphy3` + `razdel` | Лемматизация русского текста |
-| `torch` | Backend для трансформеров |
+Зависимости перечислены в `config/requirements.txt`. Ключевые пакеты:
+
+- `pdfminer.six` — извлечение текста из PDF;
+- `sentence-transformers` / `transformers` — загрузка и инференс моделей эмбеддингов и reranker;
+- `numpy` — операции с эмбеддингами (dot-product / cosine similarity);
+- `rank-bm25` — BM25 индекс для keyword search;
+- `pymorphy3` + `razdel` — лемматизация и токенизация русского текста;
+- `torch` — исполнение моделей; опционально с CUDA для ускорения инференса.
 
 ---
 

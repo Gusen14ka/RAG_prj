@@ -1,10 +1,13 @@
 import re
-import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Optional
 from pdfminer.high_level import extract_pages
 from pdfminer.layout import LTPage, LTTextContainer
 from utils.recursive_chunking import recursive_chunking
-#from parsing_llm import make_clean_for_embedding_llm
+from entities import (
+    Chunk,
+    PageContrainer,
+    ChunkMetaData
+)
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +57,7 @@ def _is_table_element(text: str) -> bool:
 # 2. Извлечение текста страницы с фильтрацией таблиц
 # ---------------------------------------------------------------------------
 
-def page_to_text(page_layout: LTPage, filter_tables: bool = True) -> Tuple[str, bool]:
+def page_to_text(page_layout: LTPage, filter_tables: bool = True) -> tuple[str, bool]:
     """
     Извлекает текст страницы.
     Возвращает (text, had_table) где had_table=True если на странице была таблица.
@@ -90,7 +93,7 @@ def page_to_text(page_layout: LTPage, filter_tables: bool = True) -> Tuple[str, 
 # 3. section_id из первой строки страницы
 # ---------------------------------------------------------------------------
 
-def extract_section_id_from_page(page_layout: LTPage) -> Optional[Tuple[str, str]]:
+def extract_section_id_from_page(page_layout: LTPage) -> Optional[tuple[str, str]]:
     """
     Возвращает (section_id, title) если первая строка страницы — нумерованный
     заголовок, иначе None.
@@ -198,6 +201,24 @@ _ALGO_BLOCK_END_RE = re.compile(
     r"\b(end\s+while|end\s+for|end\s+if)\b",
     re.I
 )
+# Паттерн начала Pascal/Algo блока begin
+_PASCAL_BEGIN_RE = re.compile(r"^\s*begin\b", re.I)
+# Паттерн конца Pascal/Algo блока end (без while/for/if суффикса)
+_PASCAL_END_RE = re.compile(r"^\s*end[\s;.]*$", re.I)
+# Заголовок алгоритма на русском: "Алгоритм 1:", "Алгоритм 2.3.", "Алгоритм A:"
+_ALGO_HEADER_RU_RE = re.compile(
+    r"^\s*(?:Алгоритм|Algorithm)\s+[\w.]+\s*[:.)]?\s*$",
+    re.I
+)
+# Признаки строки кода: операторы присваивания, стрелки, ключевые слова языков
+_CODE_SIGNS_RE = re.compile(
+    r":=|->|<-|←|→|\boutput\b|\binput\b|\bprint\b|\bgoto\b"
+    r"|\breturn\b|\byield\b|\bdo\b.*:|\bthen\b.*:|\belse\b.*:",
+    re.I
+)
+# Минимум подряд идущих некириллических строк с признаками кода для удаления блока
+_CODE_BLOCK_MIN_LINES = 4
+
 # Инлайн-алгоритм на одной строке: содержит do...end или yield внутри {}
 _ALGO_INLINE_RE = re.compile(
     r"while\b[^.]*?\bdo\b.+?\bend\s+while\b"
@@ -210,41 +231,87 @@ _ALGO_INLINE_RE = re.compile(
 def _remove_algo_blocks(text: str) -> str:
     """
     Убирает многострочные блоки псевдокода:
-        while ... do
-            ...
-        end while
-    Инлайн-алгоритмы внутри {...} не трогает — они часть определений.
+    1. while/for/if ... end while/end for/end if
+    2. begin ... end (Pascal-style)
+    3. Строки с заголовком «Алгоритм N:» + следующие некириллические строки
+    4. Блоки ≥4 подряд идущих некириллических строк с признаками кода (:=, ->, return…)
     """
     lines = text.splitlines()
-    result = []
-    in_block = False
+    result: list = []
+    in_block = False      # while/for/if block
+    in_pascal = False     # begin...end block
+    noncyrillic_run: list = []  # буфер некириллических строк (для эвристики)
+    skip_next_noncyrillic = False  # после заголовка алгоритма
+
+    def flush_noncyrillic():
+        """Сбрасываем буфер некириллических строк в result или отбрасываем."""
+        nonlocal noncyrillic_run
+        if not noncyrillic_run:
+            return
+        # Если в буфере ≥ _CODE_BLOCK_MIN_LINES строк с признаками кода — отбрасываем
+        code_lines = sum(1 for l in noncyrillic_run if _CODE_SIGNS_RE.search(l))
+        if len(noncyrillic_run) >= _CODE_BLOCK_MIN_LINES and code_lines >= 1:
+            pass  # весь буфер — код, выбрасываем
+        else:
+            result.extend(noncyrillic_run)
+        noncyrillic_run = []
 
     for line in lines:
         stripped = line.strip()
 
+        # --- Режим while/for/if блока ---
         if in_block:
-            # Ищем конец блока — строку с end тоже пропускаем
             if _ALGO_BLOCK_END_RE.search(stripped):
                 in_block = False
             continue
 
-        # Начало блока: строка без кириллицы, начинается с while/for/if
-        if (not _has_cyrillic(stripped)
-                and _ALGO_BLOCK_START_RE.match(stripped)):
-            # Если блок закрывается на той же строке — однострочный, оставляем
+        # --- Режим begin...end блока ---
+        if in_pascal:
+            if _PASCAL_END_RE.match(stripped):
+                in_pascal = False
+            continue
+
+        # --- Заголовок алгоритма на русском ---
+        if _ALGO_HEADER_RU_RE.match(stripped):
+            flush_noncyrillic()
+            skip_next_noncyrillic = True
+            continue  # сам заголовок выбрасываем
+
+        # --- Начало while/for/if блока ---
+        if not _has_cyrillic(stripped) and _ALGO_BLOCK_START_RE.match(stripped):
+            flush_noncyrillic()
             if _ALGO_BLOCK_END_RE.search(stripped):
-                result.append(line)
+                result.append(line)  # однострочный — оставляем
             else:
                 in_block = True
             continue
 
-        # Одиночный end-маркер без открывающего блока (orphan) — пропускаем
-        if (not _has_cyrillic(stripped)
-                and _ALGO_BLOCK_END_RE.match(stripped.strip())):
+        # --- Начало Pascal begin...end блока ---
+        if not _has_cyrillic(stripped) and _PASCAL_BEGIN_RE.match(stripped):
+            flush_noncyrillic()
+            in_pascal = True
             continue
 
+        # --- Одиночный end-маркер while/for/if без открывающего ---
+        if not _has_cyrillic(stripped) and _ALGO_BLOCK_END_RE.match(stripped):
+            continue
+
+        # --- Некириллическая строка: накапливаем в буфер ---
+        if stripped and not _has_cyrillic(stripped):
+            if skip_next_noncyrillic:
+                # Строки сразу после заголовка алгоритма — это тело алгоритма
+                noncyrillic_run.append(line)
+                continue
+            noncyrillic_run.append(line)
+            continue
+
+        # --- Кириллическая (или пустая) строка ---
+        skip_next_noncyrillic = False
+        flush_noncyrillic()
         result.append(line)
 
+    # Сбрасываем остаток буфера
+    flush_noncyrillic()
     return "\n".join(result)
 
 
@@ -323,21 +390,15 @@ def make_clean_for_embedding(text: str) -> str:
 # 5. Группировка страниц в контейнеры
 # ---------------------------------------------------------------------------
 
-def group_pages_to_containers(pdf_path: str) -> List[Dict[str, Any]]:
+def group_pages_to_containers(pdf_path: str) -> list[PageContrainer]:
     """
     Группирует страницы в контейнеры по нумерованным разделам.
     Таблицы терминов фильтруются: блок таблицы отбрасывается, текст до неё
     (если есть) сохраняется.
 
-    Структура контейнера:
-        {
-            "section_id": "1.1.3",
-            "page_texts": [...],
-            "metadata": {"section": str, "subsection": str},
-        }
     """
-    containers: List[Dict[str, Any]] = []
-    current: Optional[Dict[str, Any]] = None
+    containers: list[PageContrainer] = []
+    current: Optional[PageContrainer] = None
 
     for page_layout in extract_pages(pdf_path):
         page_text, _had_table = page_to_text(page_layout, filter_tables=True)
@@ -350,10 +411,10 @@ def group_pages_to_containers(pdf_path: str) -> List[Dict[str, Any]]:
             sec_id, title = header
 
             if current is not None:
-                if current["section_id"] == sec_id:
+                if current.section_id == sec_id:
                     # Продолжение того же раздела (напр. "(1/2)" и "(2/2)")
                     if page_text.strip():
-                        current["page_texts"].append(page_text)
+                        current.page_texts.append(page_text)
                     continue
                 containers.append(current)
 
@@ -364,29 +425,18 @@ def group_pages_to_containers(pdf_path: str) -> List[Dict[str, Any]]:
             else:
                 parent_id = sec_id.rsplit(".", 1)[0]
                 parent = next(
-                    (c for c in reversed(containers) if c["section_id"] == parent_id),
+                    (c for c in reversed(containers) if c.section_id == parent_id),
                     None,
                 )
-                section_name = parent["metadata"]["section"] if parent else title
+                section_name = parent.metadata.section if parent else title
                 subsection_name = title
 
-            current = {
-                "section_id": sec_id,
-                "page_texts": [page_text] if page_text.strip() else [],
-                "metadata": {
-                    "section": section_name,
-                    "subsection": subsection_name,
-                },
-            }
+            current = PageContrainer(sec_id, [page_text] if page_text.strip() else [], ChunkMetaData(section_name, subsection_name))
         else:
             if current is None:
-                current = {
-                    "section_id": "preface",
-                    "page_texts": [],
-                    "metadata": {"section": "", "subsection": ""},
-                }
+                current = PageContrainer("preface", [], ChunkMetaData("", ""))
             if page_text.strip():
-                current["page_texts"].append(page_text)
+                current.page_texts.append(page_text)
 
     if current is not None:
         containers.append(current)
@@ -398,9 +448,9 @@ def group_pages_to_containers(pdf_path: str) -> List[Dict[str, Any]]:
 # 6. Метаданные в тексте
 # ---------------------------------------------------------------------------
 
-def add_metadata_to_text(text: str, metadata: Dict[str, str]) -> str:
-    section = metadata.get("section", "")
-    subsection = metadata.get("subsection", "")
+def add_metadata_to_text(text: str, metadata: ChunkMetaData) -> str:
+    section = metadata.section
+    subsection = metadata.subsection
     title = ""
     if section:
         title = f"Раздел: {section}\n"
@@ -415,99 +465,22 @@ def add_metadata_to_text(text: str, metadata: Dict[str, str]) -> str:
 # 7. Основной pipeline
 # ---------------------------------------------------------------------------
 
-def pdf_to_chunks(pdf_path: str) -> List[Dict[str, Any]]:
-    chunks = []
+def pdf_to_chunks(pdf_path: str) -> list[Chunk]:
+    chunks: list[Chunk] = []
     containers = group_pages_to_containers(pdf_path)
     for cont in containers:
         for ch in recursive_chunking(cont):
             chunks.append(ch)
 
-    smart_chunks = []
-    count = 0
+    smart_chunks: list[Chunk] = []
     for chunk in chunks:
-        raw_normalized = normalize_text(chunk["text"])
+        raw_normalized = normalize_text(chunk.raw_text)
         if not raw_normalized.strip():
             continue
-        
-        # count += 1
-        
-        # algo_flags = ["while", "for", "return", "yield", "end"]
-        # if any(flag in raw_normalized for flag in algo_flags):
-        #     cleaned = make_clean_for_embedding_llm(raw_normalized)
-        # else:
-        #     cleaned = raw_normalized
-        
-        # print("chunk %d / %d", count, len(chunks))
 
         cleaned = make_clean_for_embedding(raw_normalized)
 
-        meta = chunk["metadata"]
-        smart_chunk = {
-            "chunk_id":   chunk["chunk_id"],
-            "clean_text": add_metadata_to_text(cleaned, meta),
-            "raw_text":   add_metadata_to_text(raw_normalized, meta),
-            "metadata":   meta,
-        }
+        meta = chunk.metadata
+        smart_chunk = Chunk(chunk.chunk_id, add_metadata_to_text(cleaned, meta), add_metadata_to_text(raw_normalized, meta), meta)
         smart_chunks.append(smart_chunk)
     return smart_chunks
-
-def pdf_to_plain_text(pdf_path) -> str:
-    text = ""
-    containers = group_pages_to_containers(pdf_path)
-    for cont in containers:
-        for ch in recursive_chunking(cont, overlap_words=0):
-            normalized = normalize_text(ch["text"])
-            if not normalized.strip():
-                continue
-            text += normalized + "\n"
-
-    return text
-
-def save_plain_text(text: str, path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
-
-def load_plain_text(path: str) -> str:
-    out = ""
-    with open(path, "r", encoding="utf-8") as f:
-        out = f.read()
-    return out
-
-
-# ---------------------------------------------------------------------------
-# 8. Сохранение
-# ---------------------------------------------------------------------------
-
-def save_chunks_with_key(chunks: List[Dict], path: str) -> None:
-    chunks_by_id: Dict[str, Any] = {}
-    for c in chunks:
-        cid = c.get("chunk_id")
-        if cid in chunks_by_id:
-            raise ValueError(f"Duplicate chunk_id: {cid}")
-        chunks_by_id[cid] = c # type: ignore
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(chunks_by_id, f, ensure_ascii=False, indent=2)
-
-
-def save_chunks(chunks: List[Dict], path: str, path_with_key: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        for c in chunks:
-            f.write(json.dumps(c, ensure_ascii=False) + "\n")
-    save_chunks_with_key(chunks, path_with_key)
-
-
-# ---------------------------------------------------------------------------
-# 9. Запуск
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import os
-    os.makedirs("data", exist_ok=True)
-
-    pdf_file = "doc.pdf"
-    output_file = "data/chunks.jsonl"
-    output_file_with_key = "data/chunks_with_key.json"
-
-    chunks = pdf_to_chunks(pdf_file)
-    save_chunks(chunks, output_file, output_file_with_key)
-    print(f"Создано чанков: {len(chunks)}")
