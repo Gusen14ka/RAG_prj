@@ -7,7 +7,7 @@ MODEL_NAME = "models/bge-reranker-v2-m3"
 
 def build_reranker(model_name: str = MODEL_NAME) -> CrossEncoder:
     """Загружает CrossEncoder один раз."""
-    return CrossEncoder(model_name)
+    return CrossEncoder(model_name, device="cuda")
 
 
 def rerank(

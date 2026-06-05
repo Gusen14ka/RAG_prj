@@ -122,7 +122,7 @@ async def search_llm(body: SearchRequest, request: Request):
             request.app.state.embeddings,
             body.query,
             request.app.state.rerank_model,
-            request.app.state.bm25
+            request.app.state.bm25,
         )
         result = convert_rag_search_llm(result)
         _cache_add(f"LLM{body.query}", {"result": result})
@@ -132,7 +132,7 @@ async def search_llm(body: SearchRequest, request: Request):
     
 @app.post("/check_answer")
 async def check_answer(body: CheckAnswerRequest, request: Request):
-    cached = _cache_get(f"QUEST{body.question_id}")
+    cached = _cache_get(f"QUEST{body.question_id}:{body.user_answer}")
     if cached is not None:
         return cached
     try:
@@ -145,7 +145,7 @@ async def check_answer(body: CheckAnswerRequest, request: Request):
             request.app.state.chunks_with_key
         )
         result = convert_check_answer(result)
-        _cache_add(f"QUEST{body.question_id}", {"result": result})
+        _cache_add(f"QUEST{body.question_id}:{body.user_answer}", {"result": result})
         return {"result": result}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

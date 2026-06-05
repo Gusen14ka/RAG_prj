@@ -1,5 +1,8 @@
 from datetime import datetime
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from time import perf_counter
 
 from embedding import search as embedding_search
 from keyword_search import search_bm25
@@ -25,15 +28,21 @@ def perform_rag_search(
         weight_embedding = 1,
         weight_keyword = 1
 ) -> list[ResponseRagSearch]:
+    t0 = perf_counter()
     res_embedding = embedding_search(embeddings, chunks, query,
                                          model=embed_model, top_k=top_k_retrieval)
+    print(f"embadding search = {perf_counter() - t0}")
+
+    t0 = perf_counter()
     if bm25 is not None:
         res_keyword = search_bm25(bm25, chunks, query, top_k=top_k_retrieval)
     else:
         res_keyword = []
+    print(f"bm25 search = {perf_counter() - t0}")
 
     res_rrf = rrf_scoring([res_embedding, res_keyword], weight_list=[weight_embedding, weight_keyword])
 
+    t0 = perf_counter()
     if rerank_model is not None:
         res_rerank = rerank(query, [x[0] for x in res_rrf], top_k_rerank, model=rerank_model)
 
@@ -42,6 +51,8 @@ def perform_rag_search(
                     if score >= rerank_threshold]
     else:
         filtered = res_rrf
+
+    print(f"rerank = {perf_counter() - t0}")
         
     if not filtered:
         return []
@@ -52,20 +63,22 @@ def perform_rag_search(
 
     return res
 
-SYSTEM_PROMPT_SEARCH = """Ты интеллектуальный помощник, который формирует красивые, грамотные и точные ответы на основе найденного контекста.
+SYSTEM_PROMPT_SEARCH = """Ты интеллектуальный помощник, который извлекает грамотные и точные ответы из предоставленного контекста.
 
-    Ты отвечаешь строго по контексту.
-
-    Сначала извлеки смысл ответа из контекста.
-    Затем сформулируй максимально понятный ответ на русском языке.
+    Ты отвечаешь только по данному контексту.
 
     Правила:
-    - использовать только контекст, данный пользователем;
-    - не добавлять знания от себя;
-    - не использовать общие энциклопедические формулировки, если они не следуют из текста;
-    - если построить ответ только по данному пользователем контексту невозможно, вернуть ровно: НЕТ_ИНФОРМАЦИИ
+    - используй только информацию, которая прямо есть в контексте;
+    - не добавляй примеры, пояснения, оговорки и дополнительные факты;
+    - не перефразируй определение слишком свободно: сохраняй смысл и терминологию контекста;
+    - если в контексте нет прямого ответа на вопрос, верни ровно: НЕТ_ИНФОРМАЦИИ;
+    - если ответ можно дать, дай его кратко, в 1–2 предложениях;
+    - не используй общие энциклопедические формулировки, если их нет в контексте;
+    - не выдумывай обозначения, формулы и свойства.
 
-    Если не уверен можно ли построить ответ или нет, лучше не строй, а возвращай ровно: НЕТ_ИНФОРМАЦИИ
+    Формат ответа:
+    - либо краткий ответ по контексту;
+    - либо ровно: НЕТ_ИНФОРМАЦИИ
     """
 
 SYSTEM_PROMPT_REPHRASE = """
@@ -143,43 +156,51 @@ def perform_rag_search_llm(
         top_k_rerank = 3,
         rerank_threshold = 0.3,
         weight_embedding = 1,
-        weight_keyword = 1        
+        weight_keyword = 1,
+        use_rephrase: bool = True,
 ) -> ResponseRagSearchLlm:
     
     print(f"Start search: {datetime.now().time()}")
-    user_prompt_rephrase = _build_user_prompt_rephrase(query)
-    llm_rephrases = str(llm_model.call_llm(user_prompt_rephrase, SYSTEM_PROMPT_REPHRASE, 2056))
-    print(f"1. Rephrased: {datetime.now().time()}")
 
-    import json
+    if use_rephrase:
+        user_prompt_rephrase = _build_user_prompt_rephrase(query)
+        llm_rephrases = str(llm_model.call_llm(user_prompt_rephrase, SYSTEM_PROMPT_REPHRASE, 100))
+        print(f"1. Rephrased: {datetime.now().time()}")
 
-    response = llm_rephrases.strip()
+        import json
 
-    try:
-        data = json.loads(response)
+        response = llm_rephrases.strip()
 
-        queries = data.get("queries", [])
+        try:
+            data = json.loads(response)
 
-        if not isinstance(queries, list):
-            raise ValueError("queries must be a list")
+            queries = data.get("queries", [])
 
-        if len(queries) != 3:
-            raise ValueError("queries must contain exactly 3 items")
+            if not isinstance(queries, list):
+                raise ValueError("queries must be a list")
 
-        rephrases = [str(q) for q in queries]
+            if len(queries) != 3:
+                raise ValueError("queries must contain exactly 3 items")
 
-    except Exception:
+            rephrases = [str(q) for q in queries]
+
+        except Exception:
+            rephrases = [query, "", ""]
+    else:
         rephrases = [query, "", ""]
 
+
+    # Убираем пустые перефразировки — они ведут к лишним запросам и
+    # могут вызывать проблемы при параллельном кодировании запросов.
+    rephrases = [r for r in rephrases if r and r.strip()]
 
     #DEBUG
     print("rephrases")
     for r in rephrases:
         print(r)
-    
-    chunks_responses: list[list[ResponseRagSearch]] = []
-    for rephrased_query in rephrases:
-        chunks_response = perform_rag_search(
+
+    def _retrieve(rephrased_query: str) -> list[ResponseRagSearch]:
+        return perform_rag_search(
             embed_model,
             chunks,
             chunks_with_key,
@@ -193,8 +214,20 @@ def perform_rag_search_llm(
             weight_embedding,
             weight_keyword
         )
-        chunks_responses.append(chunks_response)
-        print(f"2. Retrieved: {datetime.now().time()}")
+    chunks_responses: list[list[ResponseRagSearch]] = [None] * len(rephrases)  # type: ignore
+
+    # Если только один запрос, выполняем последовательно — это надежнее
+    # для SentenceTransformer, который не всегда корректно работает в нескольких потоках.
+    if len(rephrases) == 1:
+        chunks_responses[0] = _retrieve(rephrases[0])
+        print(f"2. Retrieved [0]: {datetime.now().time()}, chunks:{len(chunks_responses[0])}")
+    else:
+        with ThreadPoolExecutor(max_workers=len(rephrases)) as executor:
+            future_to_idx = {executor.submit(_retrieve, q): i for i, q in enumerate(rephrases)}
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                chunks_responses[idx] = future.result()
+                print(f"2. Retrieved [{idx}]: {datetime.now().time()}, chunks:{len(chunks_responses[idx])}")
 
     chunks_for_rrf = [[r.chunk for r in l] for l in chunks_responses]
     rrf_chunks = rrf_scoring(chunks_for_rrf)[:top_k_rerank]
@@ -205,7 +238,7 @@ def perform_rag_search_llm(
     
     user_prompt = _build_user_prompt_search(query, rrf_response)
     print(f"3. LLM query start: {datetime.now().time()}")
-    llm_answer = llm_model.call_llm(user_prompt, SYSTEM_PROMPT_SEARCH, 2056)
+    llm_answer = llm_model.call_llm(user_prompt, SYSTEM_PROMPT_SEARCH, 150)
     print(f"3. LLM query ended: {datetime.now().time()}")
 
     if not llm_answer or llm_answer == "НЕТ_ИНФОРМАЦИИ":

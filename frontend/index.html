@@ -499,10 +499,9 @@ async function checkAnswer() {
     const r = data.result;
     // r: { is_correct, score, gold_answers: string[], source_chunks: Chunk[] }
     renderCheckResult(r);
-    btn.disabled = false;
-    btn.textContent = 'Проверить';
   } catch (e) {
     document.getElementById('trainer-result').innerHTML = `<div style="color:var(--danger-text);font-size:13px;">Ошибка: ${e.message}</div>`;
+  } finally {
     btn.disabled = false;
     btn.textContent = 'Проверить';
   }
@@ -522,7 +521,6 @@ function renderCheckResult(r) {
     <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;">
       ${goldAnswers.length ? `<button class="secondary" onclick="toggleTrainerSection('gold-answers-block')">Правильные ответы</button>` : ''}
       ${sourceChunks.length ? `<button class="secondary" onclick="toggleTrainerSection('source-chunks-block')">Источники</button>` : ''}
-      <button class="secondary" onclick="nextQuestion()">Следующий вопрос →</button>
     </div>
 
     ${goldAnswers.length ? `

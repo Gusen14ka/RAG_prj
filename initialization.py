@@ -58,14 +58,7 @@ def init_rag() -> RagState:
         print(f"    Loaded {len(chunks)} chunks from cache.")
     chunks_with_key = load_chunks_json_as_dict(CHUNK_WITH_KEY_PATH)
 
-    embed_model  = build_model(EMBADDING_MODEL_PATH)
     rerank_model = build_reranker(RERANK_MODEL_PATH)
-
-    if not Path(EMBEDDINGS_PATH).exists():
-        print("    Encoding chunks...")
-        embeddings = build_and_save_embeddings(chunks, embed_model, EMBEDDINGS_PATH)
-    else:
-        embeddings = load_embeddings(EMBEDDINGS_PATH)
 
     if not Path(BM25_PATH).exists():
         bm25 = build_bm25(chunks)
@@ -76,6 +69,26 @@ def init_rag() -> RagState:
     print("    Loading LLM model...")
     llm_model = Llm(LLM_MODEL_PATH, gpu_mode=torch.cuda.is_available())
     print("    LLM susscesfully loaded")
+
+    # Пробуем загрузить embedding-модель на GPU, если осталось достаточно VRAM.
+    # multilingual-e5-large занимает ~560 МБ; оставляем запас 1.5 ГБ для надёжности.
+    embed_device = "cpu"
+    if torch.cuda.is_available():
+        free_vram = torch.cuda.mem_get_info()[0]  # bytes
+        if free_vram >= 1.5 * 1024 ** 3:  # >= 1.5 ГБ свободно
+            embed_device = "cuda"
+            print(f"    Embedding model will use GPU (free VRAM: {free_vram / 1024**3:.1f} GB)")
+        else:
+            print(f"    Not enough VRAM for embedding model ({free_vram / 1024**3:.1f} GB free), using CPU")
+
+    embed_model = build_model(EMBADDING_MODEL_PATH, device=embed_device)
+
+    if not Path(EMBEDDINGS_PATH).exists():
+        print("    Encoding chunks...")
+        embeddings = build_and_save_embeddings(chunks, embed_model, EMBEDDINGS_PATH)
+    else:
+        embeddings = load_embeddings(EMBEDDINGS_PATH)
+
     if not Path(QUESTIONS_BANK_PATH).exists():
         print("    Generating questions...") 
         generate_questions(SOURCE_PDF_PATH, embed_model, rerank_model, chunks, chunks_with_key, embeddings, llm_model, QUESTIONS_BANK_PATH)

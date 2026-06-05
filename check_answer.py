@@ -15,6 +15,28 @@ def _check_answer(rerank_model, answer: str, question: Question) -> tuple[bool, 
             return False, 0.0
     
     answer = MULTISPACE_RE.sub(" ", answer).strip()
+    # Дополнительная фильтрация: если пользователь просто повторяет сам вопрос
+    # или отвечает только ключевым термином, не считаем это правильным.
+    def _normalize(text: str) -> str:
+        if not text:
+            return ""
+        t = MULTISPACE_RE.sub(" ", text).strip().lower()
+        # Убираем пунктуацию
+        t = re.sub(r"[^\w\s]", "", t)
+        return t
+
+    norm_answer = _normalize(answer)
+    norm_question = _normalize(question.question)
+    norm_term = _normalize(getattr(question, "term", ""))
+
+    # Если ответ совпадает с вопросом/термином или является его подстрокой
+    # (например, вопрос "Что такое обратная функция" и ответ "обратная функция"),
+    # то это тривиальный ответ — помечаем как неверный.
+    if not norm_answer:
+        return False, 0.0
+
+    if norm_answer == norm_term or norm_answer == norm_question or norm_answer in norm_question:
+        return False, 0.0
     
     # Проводим сравнение рерак-моделью:
     q_score = rerank_model.predict([(answer, question.question)], show_progress_bar=False)[0]
